@@ -1,0 +1,25 @@
+# --- Security & Secrets (CRITICAL) ---
+.env
+*.secret
+configs/*.json
+!configs/*.sample.json
+!configs/scrapers.sample.json
+
+# --- Dependencies ---
+node_modules/
+__pycache__/
+*.venv/
+vendor/
+
+# --- Data & Logs ---
+tmp/
+data/
+tmp_data/*
+*.log
+*.out
+
+# --- IDE & OS ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
