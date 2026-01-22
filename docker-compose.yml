@@ -1,0 +1,68 @@
+services:
+  nats:
+    image: nats:latest
+    container_name: nats-jetstream
+    command: -js
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+
+  argus-db:
+    # Mantive sua versão. Se quebrar no pull, volta pra postgres:16-alpine
+    image: postgres:18.1-alpine3.23
+    container_name: banco-argus-dev
+    environment:
+      POSTGRES_USER: argus-user
+      POSTGRES_PASSWORD: senha1234
+      POSTGRES_DB: argus-post-db
+      TZ: America/Sao_Paulo
+    volumes:
+      # CORRIGIDO: O nome aqui tem que bater com o declarado lá embaixo
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      # ADICIONADO: -d argus-post-db para apontar pro banco certo
+      test: ["CMD-SHELL", "pg_isready -U argus-user -d argus-post-db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  argus-cache:
+    # Mantive sua versão. Se quebrar, volta pra redis:7-alpine
+    image: redis:8.4.0-alpine
+    container_name: argus-cache
+    restart: always
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  argus-meili:
+    # Mantive sua versão. Se quebrar, volta pra v1.6
+    image: getmeili/meilisearch:v1.33.1
+    container_name: argus-search
+    ports: 
+      - "7700:7700"
+    volumes:
+      - meili_data:/meili_data
+    environment:
+      - MEILI_MASTER_KEY=masterKey123
+      - MEILI_ENV=development
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  nats_data:
+  redis_data:
+  meili_data:
+  argus_temp_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/tmp_data

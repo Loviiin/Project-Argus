@@ -1,0 +1,6 @@
+# Força todos os arquivos de texto a usarem LF no repositório,
+# mas deixa o Git decidir como baixar no sistema do usuário.
+# * text=auto
+
+# Se quiser FORÇAR LF sempre (recomendado pra projetos modernos)
+ * text=auto eol=lf

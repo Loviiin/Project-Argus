@@ -4,6 +4,5 @@ go 1.25.6
 //     ./pkg
 //     ./services/discovery
 //     ./services/parser
-//     ./services/scraper
-//     ./services/vision
+//     ./cmd/argus-cli
 // )
