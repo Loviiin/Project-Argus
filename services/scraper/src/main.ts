@@ -4,7 +4,7 @@ import { ScraperEngine } from "./engine";
 const sc = StringCodec();
 
 async function bootstrap() {
-  console.log('Scraper Worker iniciando');
+  console.log("Scraper Worker iniciando");
 
   const engine = new ScraperEngine();
   await engine.init();
@@ -55,19 +55,17 @@ async function bootstrap() {
 
         m.ack();
         console.log("Ack enviado.");
-
       } catch (err) {
         console.error("Erro processando mensagem:", err);
       }
     }
-
   } catch (err) {
-    console.error('Erro fatal:', err);
+    console.error("Erro fatal:", err);
     process.exit(1);
   }
 
-  process.on('SIGINT', async () => {
-    console.log('Encerrando conexões');
+  process.on("SIGINT", async () => {
+    console.log("Encerrando conexões");
     if (nc) await nc.drain();
     process.exit(0);
   });
