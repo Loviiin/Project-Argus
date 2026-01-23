@@ -45,9 +45,13 @@ async function bootstrap() {
         console.log(`\nMENSAGEM RECEBIDA (Seq: ${m.seq}):`);
         console.log(` Conteúdo: ${data}`);
 
-        console.log("Trabalhando...");
+        console.log("Trabalhando");
 
-        await engine.processUrl(data, m.seq.toString());
+        const savePath = await engine.processUrl(data, m.seq.toString());
+        console.log(`Processamento concluído. Evidência salva em: ${savePath}`);
+
+        await js.publish("jobs.analyse", sc.encode(savePath));
+        console.log("Evidência enviada para análise.");
 
         m.ack();
         console.log("Ack enviado.");

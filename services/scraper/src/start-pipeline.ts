@@ -5,8 +5,10 @@ import { connect, StringCodec } from "nats";
     const js = nc.jetstream();
     const sc = StringCodec();
 
-    await js.publish("jobs.scrape", sc.encode("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+    const target = "https://youtube.com/watch?v=dQw4w9WgXcQ";
+
+    console.log(`Iniciando pipeline para: ${target}`);
+    await js.publish("jobs.scrape", sc.encode(target));
     
-    console.log("URL enviada para a fila!");
     await nc.drain();
 })();
