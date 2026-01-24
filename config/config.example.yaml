@@ -1,0 +1,14 @@
+app:
+  env: "local"
+
+discord:
+  token: "your_token_here" # optional; leave empty for anonymous
+
+database:
+  url: "postgres://your_user:postgres_password@127.0.0.1:5432/argus-post-db?sslmode=disable"
+
+targets:
+  hashtags:
+    - "funnycats"
+    - "dailyvlog"
+    - "tutorial"
