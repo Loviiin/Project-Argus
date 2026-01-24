@@ -13,9 +13,9 @@ services:
     image: postgres:18.1-alpine3.23
     container_name: banco-argus-dev
     environment:
-      POSTGRES_USER: argus-user
-      POSTGRES_PASSWORD: senha1234
-      POSTGRES_DB: argus-post-db
+      POSTGRES_USER: ${POSTGRES_USER:-argus-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-argus-post-db}
       TZ: America/Sao_Paulo
     volumes:
       - postgres_data:/var/lib/postgresql/data

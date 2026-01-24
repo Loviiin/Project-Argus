@@ -1,9 +1,10 @@
 # --- Security & Secrets (CRITICAL) ---
 .env
 *.secret
-configs/*.json
-!configs/*.sample.json
-!configs/scrapers.sample.json
+config/*.json
+config/config.yaml
+!config/*.sample.json
+!config/scrapers.sample.json
 
 # --- Dependencies ---
 node_modules/
