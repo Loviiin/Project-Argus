@@ -18,6 +18,7 @@ import (
 	"parser/internal/dto"
 	"parser/internal/logic"
 	"parser/internal/repository"
+	"parser/internal/search"
 )
 
 func main() {
@@ -31,6 +32,8 @@ func main() {
 	}
 	defer repo.Close(context.Background())
 	fmt.Println("Conectado ao PostgreSQL!")
+
+	indexer := search.NewIndexer(cfg.Meilisearch.Host, cfg.Meilisearch.Key, cfg.Meilisearch.Index)
 
 	natsURL := os.Getenv("NATS_URL")
 	if natsURL == "" {
@@ -96,10 +99,23 @@ func main() {
 					RiskScore:          0,
 				}
 
-				if err := repo.Save(context.Background(), artifact); err != nil {
+				artifactID, err := repo.Save(context.Background(), artifact)
+				if err != nil {
 					fmt.Printf("Erro ao salvar no DB: %v\n", err)
 				} else {
-					fmt.Println("Salvo com sucesso.")
+					fmt.Printf("Salvo com sucesso (ID: %s). Indexando...\n", artifactID)
+
+					err := indexer.IndexData(search.SearchDoc{
+						ID:         artifactID,
+						ServerName: artifact.DiscordServerName,
+						InviteCode: artifact.DiscordInviteCode,
+						SourceURL:  artifact.SourceURL,
+						Timestamp:  time.Now().Unix(),
+					})
+
+					if err != nil {
+						fmt.Printf("Falha na indexação: %v\n", err)
+					}
 				}
 			}
 		} else {

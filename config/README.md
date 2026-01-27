@@ -23,6 +23,11 @@ targets:
     - "funnycats"
     - "dailyvlog"
     - "tutorial"
+
+meilisearch:
+  host: "http://"
+  key: "masterKey"
+  index: "artifacts"
 ```
 
 Environment variables can override settings. Parser enables `viper.AutomaticEnv()` with `.` replaced by `_`, so `DATABASE_URL` overrides `database.url`.

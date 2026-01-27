@@ -23,6 +23,12 @@ type Config struct {
 	Targets struct {
 		Hashtags []string `mapstructure:"hashtags"`
 	} `mapstructure:"targets"`
+
+	Meilisearch struct {
+		Host  string `mapstructure:"host"`
+		Key   string `mapstructure:"key"`
+		Index string `mapstructure:"index"`
+	} `mapstructure:"meilisearch"`
 }
 
 func LoadConfig() *Config {
