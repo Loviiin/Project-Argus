@@ -12,3 +12,9 @@ targets:
     - "funnycats"
     - "dailyvlog"
     - "tutorial"
+
+meilisearch:
+  host: "http://localhost:7700"
+  key: "masterKey123"
+  index: "artifacts"
+
