@@ -17,6 +17,7 @@ type Artifact struct {
 	DiscordMemberCount int
 	RawOcrText         string
 	RiskScore          int
+	DiscordIcon        string
 }
 
 type ArtifactRepository struct {
@@ -58,6 +59,7 @@ func (r *ArtifactRepository) initSchema() error {
             discord_server_name VARCHAR(255),
             discord_server_id VARCHAR(100),
             discord_member_count INT,
+            discord_icon TEXT,
         
             -- Auditoria
             raw_ocr_text TEXT, 
@@ -89,8 +91,8 @@ func (r *ArtifactRepository) initSchema() error {
 func (r *ArtifactRepository) Save(ctx context.Context, a Artifact) (string, error) {
 	query := `
         INSERT INTO artifacts 
-        (source_url, author_id, discord_invite_code, discord_server_name, discord_server_id, discord_member_count, raw_ocr_text, risk_score, processed_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        (source_url, author_id, discord_invite_code, discord_server_name, discord_server_id, discord_member_count, raw_ocr_text, risk_score, processed_at,discord_icon)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9)
         ON CONFLICT (source_url, discord_invite_code) DO UPDATE 
         SET processed_at = NOW(),
             discord_member_count = EXCLUDED.discord_member_count

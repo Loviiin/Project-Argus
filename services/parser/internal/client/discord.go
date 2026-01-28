@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -37,7 +38,17 @@ func NewDiscordClient(token string, rdb *redis.Client) *DiscordClient {
 	}
 }
 
-func (c *DiscordClient) GetInviteInfo(inviteCode string) (*DiscordInviteResponse, error) {
+func (c *DiscordClient) GetInviteInfo(ctx context.Context, inviteCode string) (*DiscordInviteResponse, error) {
+	cacheKey := fmt.Sprintf("discord:invite:%s", inviteCode)
+	val, err := c.clientRedis.Get(ctx, cacheKey).Result()
+	if err == nil {
+		var cachedInvite DiscordInviteResponse
+		if err := json.Unmarshal([]byte(val), &cachedInvite); err == nil {
+			fmt.Printf("[CACHE] Convite %s encontrado no Redis\n", inviteCode)
+			return &cachedInvite, nil
+		}
+	}
+
 	url := fmt.Sprintf("https://discord.com/api/v9/invites/%s?with_counts=true", inviteCode)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -74,6 +85,10 @@ func (c *DiscordClient) GetInviteInfo(inviteCode string) (*DiscordInviteResponse
 	var inviteData DiscordInviteResponse
 	if err := json.NewDecoder(resp.Body).Decode(&inviteData); err != nil {
 		return nil, err
+	}
+
+	if jsonData, err := json.Marshal(inviteData); err == nil {
+		c.clientRedis.Set(ctx, cacheKey, jsonData, 24*time.Hour)
 	}
 
 	return &inviteData, nil

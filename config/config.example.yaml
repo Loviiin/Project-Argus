@@ -18,3 +18,9 @@ meilisearch:
   key: "masterKey123"
   index: "artifacts"
 
+redis:
+  address: "localhost:6379"
+  password: ""
+  db: 0
+
+
