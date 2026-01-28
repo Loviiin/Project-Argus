@@ -2,7 +2,7 @@ echo "--- INICIANDO SETUP DO PROJECT ARGUS ---"
 
 echo "Instalando dependências do sistema..."
 sudo apt-get update
-sudo apt-get install -y libgl1 libglib2.0-0
+sudo apt-get install -y libgl1 libglib2.0-0 ffmpeg libsm6 libxext6
 
 echo "Configurando Scraper (Node.js)..."
 cd services/scraper

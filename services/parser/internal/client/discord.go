@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type DiscordInviteResponse struct {
@@ -13,22 +15,25 @@ type DiscordInviteResponse struct {
 	Guild struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		Icon string `json:"icon"`
 	} `json:"guild"`
 	ApproximateMemberCount int     `json:"approximate_member_count"`
 	ExpiresAt              *string `json:"expires_at"` // Pode ser null
 }
 
 type DiscordClient struct {
-	httpClient *http.Client
-	token      string
+	httpClient  *http.Client
+	token       string
+	clientRedis *redis.Client
 }
 
-func NewDiscordClient(token string) *DiscordClient {
+func NewDiscordClient(token string, rdb *redis.Client) *DiscordClient {
 	return &DiscordClient{
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		token: token,
+		token:       token,
+		clientRedis: rdb,
 	}
 }
 
