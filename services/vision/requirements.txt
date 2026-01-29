@@ -5,6 +5,5 @@ nats-py
 numpy
 opencv-python-headless
 
-# IA / OCR (A escolha da Arquitetura)
-paddlepaddle
-paddleocr
+# IA / OCR
+easyocr

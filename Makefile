@@ -29,6 +29,7 @@ setup-node:
 
 setup-python:
 	@echo "Instalando deps do Vision (Python)..."
+	cd services/vision && pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 	cd services/vision && pip3 install -r requirements.txt
 
 # --- Run Services ---
