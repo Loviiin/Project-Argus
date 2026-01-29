@@ -14,6 +14,7 @@ type SearchDoc struct {
 	InviteCode string `json:"invite_code"`
 	SourceURL  string `json:"source_url"`
 	Timestamp  int64  `json:"timestamp"`
+	Icon       string `json:"icon,omitempty"`
 }
 
 // Indexer é a struct que guarda a conexão aberta

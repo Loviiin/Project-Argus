@@ -29,6 +29,12 @@ type Config struct {
 		Key   string `mapstructure:"key"`
 		Index string `mapstructure:"index"`
 	} `mapstructure:"meilisearch"`
+
+	Redis struct {
+		Address  string `mapstructure:"address"`
+		Password string `mapstructure:"password"`
+		DB       int    `mapstructure:"db"`
+	} `mapstructure:"redis"`
 }
 
 func LoadConfig() *Config {

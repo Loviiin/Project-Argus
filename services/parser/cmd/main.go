@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/redis/go-redis/v9"
 
 	"parser/internal/client"
 	"parser/internal/config"
@@ -46,12 +47,23 @@ func main() {
 	}
 	defer nc.Close()
 
+	fmt.Println("Conectando ao Redis...")
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		log.Fatalf("Erro fatal: Redis não responde em %s: %v", cfg.Redis.Address, err)
+	}
+	fmt.Println("Redis conectado!")
+
 	js, _ := nc.JetStream()
 	fmt.Println("Parser Service (Go) iniciado. Aguardando textos...")
 
 	finder := logic.NewDiscordFinder()
-	discordClient := client.NewDiscordClient(cfg.Discord.Token)
-
+	discordClient := client.NewDiscordClient(cfg.Discord.Token, rdb)
 	sub, err := js.Subscribe("data.text_extracted", func(msg *nats.Msg) {
 
 		var payload dto.OcrMessage
@@ -78,7 +90,7 @@ func main() {
 					continue
 				}
 
-				inviteInfo, err := discordClient.GetInviteInfo(inviteCode)
+				inviteInfo, err := discordClient.GetInviteInfo(context.Background(), inviteCode)
 				if err != nil {
 					fmt.Printf("Erro consultando %s: %v\n", inviteLink, err)
 					continue
@@ -88,9 +100,15 @@ func main() {
 					inviteLink, inviteInfo.Guild.Name, inviteInfo.Guild.ID, inviteInfo.ApproximateMemberCount)
 
 				fmt.Printf("Salvando '%s' no banco...\n", inviteInfo.Guild.Name)
+
+				author := payload.AuthorID
+				if author == "" {
+					author = "desconhecido"
+				}
+
 				artifact := repository.Artifact{
 					SourceURL:          payload.SourcePath,
-					AuthorID:           "desconhecido_por_enquanto",
+					AuthorID:           author,
 					DiscordInviteCode:  inviteCode,
 					DiscordServerName:  inviteInfo.Guild.Name,
 					DiscordServerID:    inviteInfo.Guild.ID,
@@ -105,12 +123,18 @@ func main() {
 				} else {
 					fmt.Printf("Salvo com sucesso (ID: %s). Indexando...\n", artifactID)
 
+					var iconURL string
+					if inviteInfo.Guild.Icon != "" {
+						iconURL = fmt.Sprintf("https://cdn.discordapp.com/icons/%s/%s.png", inviteInfo.Guild.ID, inviteInfo.Guild.Icon)
+					}
+
 					err := indexer.IndexData(search.SearchDoc{
 						ID:         artifactID,
 						ServerName: artifact.DiscordServerName,
 						InviteCode: artifact.DiscordInviteCode,
 						SourceURL:  artifact.SourceURL,
 						Timestamp:  time.Now().Unix(),
+						Icon:       iconURL,
 					})
 
 					if err != nil {

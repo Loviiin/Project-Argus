@@ -17,7 +17,8 @@ async function bootstrap() {
     const consumerName = "SCRAPER_WORKER";
     const filterSubject = "jobs.scrape";
 
-    nc = await connect({ servers: "nats://localhost:4222" });
+    const natsUrl = process.env.NATS_URL || "nats://localhost:4222";
+    nc = await connect({ servers: natsUrl });
     console.log(`Conectado ao NATS em: ${nc.getServer()}`);
 
     const jsm = await nc.jetstreamManager();

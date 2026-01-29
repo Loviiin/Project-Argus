@@ -91,8 +91,9 @@ async def main():
                         preview = (texto_final[:75] + '..') if len(texto_final) > 75 else texto_final
                         print(f"Texto Extraido: {preview}")
 
-                        log_path = "/workspaces/Project-Argus/tmp_data/historico_ocr.txt"
+                        log_path = os.path.abspath("../../tmp_data/historico_ocr.txt")
                         try:
+                            os.makedirs(os.path.dirname(log_path), exist_ok=True)
                             with open(log_path, "a", encoding="utf-8") as f:
                                 f.write(f"\n--- Job: {arquivo} ---\n{texto_final}\n")
                             print(f"Texto appendado em {log_path}")
