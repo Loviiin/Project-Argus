@@ -11,86 +11,64 @@ This repo is set up to run inside a devcontainer on Ubuntu. The commands below a
 
 ## Quick Start
 
-1. Start infrastructure
+We use a `Makefile` to simplify the workflow.
 
-```bash
-docker compose up -d nats argus-db argus-cache argus-meili
-```
+### 1. Configure the Application
 
-2. Verify Postgres is healthy
-
-```bash
-docker ps --format "table {{.Names}}\t{{.Status}}" | grep banco-argus-dev
-```
-
-3. Configure the app
-
-Use the example file and copy it to your local config:
+Copy the example configuration:
 
 ```bash
 cp config/config.example.yaml config/config.yaml
 ```
 
-Edit `config/config.yaml` with your credentials. Do not commit secrets. Example placeholders:
+Edit `config/config.yaml` with your credentials. **Do not commit secrets.**
 
-```yaml
-database:
-	url: "postgres://your_user:postgres_password@127.0.0.1:5432/argus-post-db?sslmode=disable"
+### 2. Setup & Infrastructure
 
-discord:
-	token: "your_token_here" # leave empty for anonymous mode
-
-targets:
-	hashtags:
-		- "funnycats"
-		- "dailyvlog"
-		- "tutorial"
-```
-
-4. Run the Parser service (Go)
+Install dependencies and start the Docker infrastructure:
 
 ```bash
-cd services/parser
-go run cmd/main.go
+make setup  # Installs deps for Go, Node, and Python
+make up     # Starts NATS, Postgres, Redis, Meilisearch
 ```
 
-5. Run the Vision service (Python)
+### 3. Run Services
+
+Open separate terminals for each service:
 
 ```bash
-cd services/vision
-pip3 install -r requirements.txt
-python src/main.py
+make run-parser   # Terminal 1: Parser Service (Go)
+make run-scraper  # Terminal 2: Scraper Service (Node)
+make run-vision   # Terminal 3: Vision Service (Python)
 ```
 
-6. Send a test payload (skip OCR, publish directly to NATS)
+### 4. Testing
 
-Open a second terminal:
+Send a test payload (simulates Vision output -> Parser):
 
 ```bash
-cd services/vision
-python test_payload.py
+make send-payload
 ```
 
-7. Verify rows in Postgres
+### 5. Verification
+
+Check if data was inserted into Postgres:
 
 ```bash
-docker exec -i banco-argus-dev psql -U argus-user -d argus-post-db -c "SELECT source_url, discord_server_name, discord_invite_code, discord_member_count, LEFT(raw_ocr_text, 80) AS raw_preview, processed_at FROM artifacts ORDER BY processed_at DESC LIMIT 10;"
+docker exec -i banco-argus-dev psql -U argus-user -d argus-post-db -c "SELECT source_url, discord_invite_code, LEFT(raw_ocr_text, 50) as preview FROM artifacts ORDER BY processed_at DESC LIMIT 5;"
 ```
 
-## Optional: Scraper publisher
+## Available Make Commands
 
-Scraper publishes example URLs to NATS on `jobs.scrape`. It is a placeholder publisher and not wired to Vision by default.
-
-```bash
-cd services/scraper
-npm install
-npx ts-node src/start-pipeline.ts
-```
-
-## Environment
-
-- NATS URL defaults to `nats://localhost:4222`; override via `NATS_URL`
-- Config is loaded from `config/config.yaml`. Parser searches `../../config`, `/app/config`, and `.`
+- `make up`: Start infrastructure
+- `make down`: Stop infrastructure
+- `make logs`: detailed logs of infra
+- `make setup`: Install all dependencies
+- `make run-parser`: Run Parser service
+- `make run-scraper`: Run Scraper service
+- `make run-vision`: Run Vision service
+- `make send-payload`: Send test payload
+- `make help`: List all commands
 
 ## Troubleshooting
 

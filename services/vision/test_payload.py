@@ -1,10 +1,12 @@
 import asyncio
 import nats
 import json
+import os
 
 
 async def main():
-    nc = await nats.connect("nats://localhost:4222")
+    nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
+    nc = await nats.connect(nats_url)
     js = nc.jetstream()
 
     dados_fake = {
