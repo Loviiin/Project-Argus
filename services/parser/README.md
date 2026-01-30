@@ -10,6 +10,10 @@ Purpose
 Run
 
 ```bash
+# Via Makefile (Root)
+make run-parser
+
+# Manual
 cd services/parser
 go run cmd/main.go
 ```

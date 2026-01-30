@@ -9,16 +9,23 @@ Purpose
 Install and run
 
 ```bash
+# Via Makefile (Root)
+make run-vision
+
+# Manual
 cd services/vision
 pip3 install -r requirements.txt
 python src/main.py
 ```
 
-Quick test (publish a fake payload)
+Testing
 
 ```bash
-cd services/vision
-python test_payload.py
+# Process jobs (Mock NATS)
+make test-vision-job
+
+# Manual (Send fake payload to Parser)
+make send-payload
 ```
 
 Environment
