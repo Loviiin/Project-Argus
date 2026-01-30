@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import datetime
 import signal
 import sys
 import cv2
@@ -12,6 +13,14 @@ from nats.errors import ConnectionClosedError, TimeoutError, NoRespondersError
 print("Carregando modelo OCR (pode demorar um pouco)...")
 reader = easyocr.Reader(['en', 'pt'], gpu=True) 
 print("Modelo OCR carregado!")
+
+def preprocess_frame(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    enhanced = clahe.apply(gray)
+    
+    return enhanced
 
 async def process_video(video_path):
     print(f"Processando vídeo: {video_path}")
@@ -36,7 +45,8 @@ async def process_video(video_path):
         ret, frame = cap.read()
         
         if ret:
-            results = reader.readtext(frame, detail=0)
+            processed_frame = preprocess_frame(frame)
+            results = reader.readtext(processed_frame, detail=0)
             text_chunk = " ".join(results)
             full_text.append(f"[FRAME_{int(p*100)}%]: {text_chunk}")
         else:
@@ -84,14 +94,13 @@ async def main():
         try:
             extracted_text = await process_video(video_path)
 
-            # Salva no histórico se houve texto extraído
             if extracted_text:
                 try:
-                    # Caminho relativo considerando execução de services/vision
                     log_path = os.path.abspath("../../tmp_data/historico_ocr.txt")
                     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     with open(log_path, "a", encoding="utf-8") as f:
-                        f.write(f"\n--- Job: {video_path} ---\n{extracted_text}\n")
+                        f.write(f"\n--- [{timestamp}] Job: {video_path} ---\n{extracted_text}\n")
                     print(f"Texto salvo em {log_path}")
                 except Exception as e_log:
                     print(f"Falha ao salvar log local: {e_log}")

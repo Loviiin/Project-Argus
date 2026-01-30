@@ -45,8 +45,17 @@ run-vision: ## Roda o serviço Vision (Python)
 
 # --- Testing / Payload ---
 
+test-full: ## Roda o teste de fluxo completo (Integration)
+	python3 tests/integration/test_full_flow.py
+
+test-scraper-browser: ## Roda o teste de browser do scraper (Playwright)
+	cd services/scraper && npx ts-node tests/browser.test.ts
+
+test-vision-job: ## Roda o teste de job do vision (Mock NATS)
+	python3 services/vision/tests/test_vision_job.py
+
 send-payload: ## Envia um payload de teste (Vision -> Parser)
-	cd services/vision && python3 test_payload.py
+	python3 services/vision/tests/test_vision_payload.py
 
 # --- Utilities ---
 

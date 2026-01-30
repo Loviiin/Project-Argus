@@ -14,10 +14,14 @@
   "dependencies": {
     "dotenv": "^17.2.3",
     "nats": "^2.29.3",
-    "playwright": "^1.57.0"
+    "playwright": "^1.57.0",
+    "uuid": "^13.0.0",
+    "youtube-dl-exec": "^3.0.30"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
+    "@types/uuid": "^10.0.0",
+    "debug": "^4.4.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }

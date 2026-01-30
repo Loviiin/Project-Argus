@@ -44,10 +44,13 @@ make run-vision   # Terminal 3: Vision Service (Python)
 
 ### 4. Testing
 
-Send a test payload (simulates Vision output -> Parser):
+We have several levels of testing available via Makefile:
 
 ```bash
-make send-payload
+make test-full            # Integration: Validates the full flow (Scraper -> Vision -> Parser)
+make test-scraper-browser # E2E: Tests Scraper browser automation (Playwright)
+make test-vision-job      # Unit/Integration: Tests Vision job processing mock
+make send-payload         # Manual: Sends a fake payload from Vision -> Parser
 ```
 
 ### 5. Verification
@@ -62,12 +65,15 @@ docker exec -i banco-argus-dev psql -U argus-user -d argus-post-db -c "SELECT so
 
 - `make up`: Start infrastructure
 - `make down`: Stop infrastructure
-- `make logs`: detailed logs of infra
+- `make logs`: Detailed logs of infra
 - `make setup`: Install all dependencies
 - `make run-parser`: Run Parser service
 - `make run-scraper`: Run Scraper service
 - `make run-vision`: Run Vision service
-- `make send-payload`: Send test payload
+- `make test-full`: Run integration full flow test
+- `make test-scraper-browser`: Run scraper browser test
+- `make test-vision-job`: Run vision job test
+- `make send-payload`: Send manual test payload
 - `make help`: List all commands
 
 ## Troubleshooting

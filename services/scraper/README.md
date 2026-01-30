@@ -8,9 +8,24 @@ Purpose
 Install and run
 
 ```bash
+# Via Makefile (Root)
+make run-scraper
+
+# Manual
 cd services/scraper
 npm install
 npm start
+```
+
+Testing
+
+```bash
+# Via Makefile (Root)
+make test-scraper-browser
+
+# Manual
+cd services/scraper
+npx ts-node tests/browser.test.ts
 ```
 
 Publish a single URL via pipeline starter
