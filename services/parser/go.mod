@@ -7,7 +7,6 @@ require (
 	github.com/meilisearch/meilisearch-go v0.36.0
 	github.com/nats-io/nats.go v1.48.0
 	github.com/redis/go-redis/v9 v9.17.3
-	github.com/spf13/viper v1.21.0
 )
 
 require (

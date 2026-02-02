@@ -16,12 +16,16 @@ logs: ## Mostra os logs da infraestrutura
 
 # --- Setup & Dependencies ---
 
-setup: setup-go setup-node setup-python ## Instala dependências de todos os serviços
+setup: setup-go setup-discovery setup-node setup-python ## Instala dependências de todos os serviços
 	@echo "Setup concluído!"
 
 setup-go:
 	@echo "Instalando deps do Parser (Go)..."
 	cd services/parser && go mod tidy
+
+setup-discovery:
+	@echo "Instalando deps do Discovery (Go)..."
+	cd services/discovery && go mod tidy
 
 setup-node:
 	@echo "Instalando deps do Scraper (Node)..."
@@ -36,6 +40,9 @@ setup-python:
 
 run-parser: ## Roda o serviço Parser (Go)
 	cd services/parser && go run cmd/main.go
+
+run-discovery: ## Roda o serviço Discovery (Go)
+	cd services/discovery && go run main.go
 
 run-scraper: ## Roda o serviço Scraper (Node)
 	cd services/scraper && npm start

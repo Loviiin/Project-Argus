@@ -15,39 +15,31 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"parser/internal/client"
-	"parser/internal/config"
 	"parser/internal/dto"
 	"parser/internal/logic"
 	"parser/internal/repository"
 	"parser/internal/search"
+
+	"github.com/loviiin/project-argus/pkg/config"
 )
 
 func main() {
 	cfg := config.LoadConfig()
-	fmt.Printf("Config carregada: env=%s, hashtags=%d, token=%t\n",
-		cfg.App.Env, len(cfg.Targets.Hashtags), cfg.Discord.Token != "")
 
 	repo, err := repository.NewArtifactRepository(cfg.Database.URL)
 	if err != nil {
 		log.Fatal("Erro fatal no banco:", err)
 	}
 	defer repo.Close(context.Background())
-	fmt.Println("Conectado ao PostgreSQL!")
 
 	indexer := search.NewIndexer(cfg.Meilisearch.Host, cfg.Meilisearch.Key, cfg.Meilisearch.Index)
 
-	natsURL := os.Getenv("NATS_URL")
-	if natsURL == "" {
-		natsURL = "nats://localhost:4222"
-	}
-
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {
 		log.Fatal("Erro conectando ao NATS:", err)
 	}
 	defer nc.Close()
 
-	fmt.Println("Conectando ao Redis...")
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.Redis.Address,
 		Password: cfg.Redis.Password,
@@ -57,7 +49,6 @@ func main() {
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		log.Fatalf("Erro fatal: Redis não responde em %s: %v", cfg.Redis.Address, err)
 	}
-	fmt.Println("Redis conectado!")
 
 	js, _ := nc.JetStream()
 	fmt.Println("Parser Service (Go) iniciado. Aguardando textos...")
@@ -155,7 +146,6 @@ func main() {
 
 	fmt.Print(sub)
 
-	// Mantém o container rodando até receber Ctrl+C
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
