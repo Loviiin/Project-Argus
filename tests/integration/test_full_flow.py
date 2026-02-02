@@ -22,14 +22,19 @@ async def main():
 
     print(f"\n[2] Waiting for metadata on '{parser_output}'...")
     try:
-        msg = await sub_parser.next_msg(timeout=10)
+        # Aumentado para 600s para dar mais tempo de processamento
+        msg = await sub_parser.next_msg(timeout=600)
         data = json.loads(msg.data.decode())
         print(f"✅ Received Metadata:")
         print(f"   - Source: {data.get('source_path')}")
         print(f"   - Text Length: {len(data.get('text_content', ''))} chars")
         print(f"   - Type: {data.get('source_type')}")
     except TimeoutError:
-        print("❌ Timeout waiting for metadata.")
+        print(f"❌ Timeout waiting for metadata on '{parser_output}'.")
+        print("   ⚠️  Possíveis causas:")
+        print("   1. O serviço 'parser' pode não estar rodando ou travou.")
+        print("   2. O scraper falhou em baixar o vídeo ou extrair a descrição.")
+        print("   3. O NATS não está roteando a mensagem corretamente.")
 
     print(f"\n[3] Waiting for video job on '{vision_output}' (this includes download time)...")
     try:
