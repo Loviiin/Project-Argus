@@ -33,6 +33,10 @@ func (r *ArtifactRepository) runMigrations() error {
 			name:  "002_add_discord_icon",
 			query: "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS discord_icon TEXT;",
 		},
+		{
+			name:  "003_ensure_unique_constraint",
+			query: "CREATE UNIQUE INDEX IF NOT EXISTS artifacts_source_url_discord_invite_code_key ON artifacts (source_url, discord_invite_code);",
+		},
 	}
 
 	for _, m := range queries {
