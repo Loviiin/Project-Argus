@@ -1,6 +1,6 @@
 .PHONY: all up down logs setup clean
-.PHONY: setup-go setup-node setup-python
-.PHONY: run-parser run-scraper run-vision
+.PHONY: setup-go setup-python
+.PHONY: run-parser run-vision
 .PHONY: send-payload
 
 # --- Infrastructure ---
@@ -16,7 +16,7 @@ logs: ## Mostra os logs da infraestrutura
 
 # --- Setup & Dependencies ---
 
-setup: setup-go setup-discovery setup-node setup-python ## Instala dependências de todos os serviços
+setup: setup-go setup-discovery setup-python ## Instala dependências de todos os serviços
 	@echo "Setup concluído!"
 
 setup-go:
@@ -27,9 +27,6 @@ setup-discovery:
 	@echo "Instalando deps do Discovery (Go)..."
 	cd services/discovery && go mod tidy
 
-setup-node:
-	@echo "Instalando deps do Scraper (Node)..."
-	cd services/scraper && npm install
 
 setup-python:
 	@echo "Instalando deps do Vision (Python)..."
@@ -44,8 +41,6 @@ run-parser: ## Roda o serviço Parser (Go)
 run-discovery: ## Roda o serviço Discovery (Go)
 	cd services/discovery && go run main.go
 
-run-scraper: ## Roda o serviço Scraper (Node)
-	cd services/scraper && npm start
 
 run-vision: ## Roda o serviço Vision (Python)
 	cd services/vision && python3 src/main.py
@@ -55,8 +50,6 @@ run-vision: ## Roda o serviço Vision (Python)
 test-full: ## Roda o teste de fluxo completo (Integration)
 	python3 tests/integration/test_full_flow.py
 
-test-scraper-browser: ## Roda o teste de browser do scraper (Playwright)
-	cd services/scraper && npx ts-node tests/browser.test.ts
 
 test-vision-job: ## Roda o teste de job do vision (Mock NATS)
 	python3 services/vision/tests/test_vision_job.py

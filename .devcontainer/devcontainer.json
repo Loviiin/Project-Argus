@@ -22,7 +22,7 @@
     }
   },
 
-  "forwardPorts": [4222, 5432, 7700, 6379, 5900],
+  "forwardPorts": [4222, 5432, 7700, 6379, 5900, 9222],
 
 
   "postCreateCommand": "bash .devcontainer/setup.sh",
