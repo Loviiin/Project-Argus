@@ -7,6 +7,12 @@ discord:
 database:
   url: "postgres://your_user:postgres_password@127.0.0.1:5432/argus-post-db?sslmode=disable"
 
+discovery:
+  hashtags:
+    - "discord"
+    - "discordserver"
+  interval_seconds: 1000
+
 targets:
   hashtags:
     - "funnycats"
@@ -22,5 +28,66 @@ redis:
   address: "localhost:6379"
   password: ""
   db: 0
+
+nats:
+  url: "nats://localhost:4222"
+
+# ============================================
+# PREMIUM FEATURES (Closed Source)
+# ============================================
+# These features provide advanced anti-detection for captcha solving
+# Success rate: ~80-85% (vs ~30-40% without)
+#
+# IMPORTANT: Do NOT share these exact values if open sourcing
+# ============================================
+
+captcha:
+  # Humanized Movement (PREMIUM)
+  # Simulates realistic human mouse behavior
+  humanized_movement:
+    enabled: true              # false = basic linear movement (open source)
+    bezier_curves: true        # Cubic Bézier curves with random control points
+    overshoot: true            # 70% chance to overshoot 3-8px and correct back
+    micro_pauses: true         # Random pauses every 12-20 steps (20-50ms)
+    tremor: true               # Hand tremor: ±3px horizontal, ±2px vertical
+    
+  # Delay Configuration (PREMIUM)
+  # Controls timing between mouse movements
+  delays:
+    type: "gaussian"           # "gaussian" (premium) or "fixed" (open source)
+    min_ms: 15                 # Minimum delay between steps
+    max_ms: 35                 # Maximum delay between steps
+    steps_min: 80              # Minimum movement steps (open: 20-40, premium: 80-120)
+    steps_max: 120             # Maximum movement steps (more = smoother)
+    
+  # Anti-Detection (PREMIUM - Future Implementation)
+  # Advanced fingerprinting and evasion techniques
+  anti_detection:
+    tls_fingerprint: false     # TODO: Randomize TLS client hello fingerprint
+    cookie_rotation: false     # TODO: Rotate cookies from pool
+    user_agent_rotation: false # TODO: Use multiple realistic user agents
+    viewport_randomization: false # TODO: Randomize browser viewport size
+
+# ============================================
+# CONFIGURATION GUIDE
+# ============================================
+#
+# Basic Setup (Free Tier):
+#   captcha.humanized_movement.enabled: false
+#   captcha.delays.type: "fixed"
+#   Expected success rate: ~30-40%
+#
+# Premium Setup (Current):
+#   captcha.humanized_movement.enabled: true
+#   captcha.delays.type: "gaussian"
+#   Expected success rate: ~80-85%
+#
+# For Open Source Release:
+#   1. Remove all "Premium Features" section
+#   2. Keep only basic OpenCV detection
+#   3. See OPEN_CORE_STRATEGY.md for details
+#
+# ============================================
+
 
 

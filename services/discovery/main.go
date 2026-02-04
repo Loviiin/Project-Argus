@@ -11,6 +11,7 @@ import (
 	"discovery/internal/repository"
 	"discovery/internal/service"
 	"discovery/internal/sources"
+	"discovery/internal/sources/tiktok"
 
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/nats-io/nats.go"
@@ -30,7 +31,7 @@ func main() {
 
 	dedup := repository.NewDeduplicator(cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
 	log.Println("Inicializando driver do navegador...")
-	tikTokSource := sources.NewTikTokRodSource()
+	tikTokSource := tiktok.NewSource()
 
 	svc := service.NewDiscoveryService(dedup, js, []sources.Source{tikTokSource})
 
