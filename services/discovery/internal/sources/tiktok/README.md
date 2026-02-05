@@ -1,70 +1,19 @@
-# TikTok Scraper - Discovery Service
+# Pacote TikTok - Scraper Modular
 
-**🔒 PRIVATE - Contains Premium Features**
-
-Advanced TikTok scraper with captcha solving capabilities.
+Este pacote contém a implementação modular do scraper do TikTok usando Go-Rod.
 
 ## 📁 Estrutura de Arquivos
 
 ```
 tiktok/
-├── client.go          # Browser automation + API interception
-├── captcha.go         # Captcha detection and solving
-├── mouse.go           # ⭐ PREMIUM: Humanized movement (Bézier, overshoot)
-├── config.go          # ⭐ PREMIUM: Feature toggle system
-├── nats_solver.go     # NATS communication with Vision Service
-└── types.go           # Data models
+├── client.go        # Navegação e orquestração principal
+├── captcha.go       # Detecção e extração de captcha
+├── mouse.go         # Movimento humanizado do mouse (Curvas de Bézier)
+├── nats_solver.go   # Comunicação NATS (Stub para integração futura)
+└── types.go         # Structs e tipos de dados
 ```
 
-## 🎯 Features
-
-### Standard (Can be Open Sourced)
-
-- TikTok tag scraping
-- API request interception
-- Video metadata extraction
-- Redis deduplication
-- Basic captcha detection
-
-### ⭐ Premium (Keep Private)
-
-- **Humanized Mouse Movement**
-  - Bézier cubic curves with random control points
-  - Overshoot behavior (70% chance, 3-8px)
-  - Micro-pauses every 12-20 steps
-  - Hand tremor simulation (±3px, ±2px)
-- **Gaussian Delay Distribution**
-  - Non-linear timing (15-35ms)
-  - Acceleration curves
-  - Based on Fitts's Law
-- **Success Rate**: 80-85% (vs 30-40% basic)
-
-## ⚙️ Configuration
-
-Edit `config/config.yaml`:
-
-```yaml
-captcha:
-  humanized_movement:
-    enabled: true # false = basic (open source)
-    bezier_curves: true
-    overshoot: true
-    micro_pauses: true
-    tremor: true
-```
-
-## 🚀 Running
-
-```bash
-# With captcha solver
-make run-captcha-solver  # Terminal 1
-make run-discovery       # Terminal 2
-
-# Test
-make test-captcha
-```
-
-## 📂 Responsabilidades dos Arquivos
+## 🎯 Responsabilidades
 
 ### client.go
 

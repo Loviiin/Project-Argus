@@ -1,11 +1,16 @@
 package tiktok
 
-import (
-	"discovery/internal/sources"
-	"errors"
-)
+import "errors"
 
-type RawVideoMetadata = sources.RawVideoMetadata
+// RawVideoMetadata representa os metadados brutos extraídos de um vídeo do TikTok
+type RawVideoMetadata struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	URL         string   `json:"url"`
+	Author      string   `json:"author"`
+	Comments    []string `json:"comments"`
+}
 
 // TikTokAPIResponse representa a resposta da API interna do TikTok para comentários
 type TikTokAPIResponse struct {

@@ -10,32 +10,34 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
-var captchaConfig CaptchaConfig
-
 func init() {
 	rand.Seed(time.Now().UnixNano())
-	captchaConfig = LoadCaptchaConfig()
-	captchaConfig.PrintConfig()
 }
 
+// DragSlider arrasta o slider do captcha simulando movimento humano
+// Usa curvas de Bézier e aceleração variável para evitar detecção
 func DragSlider(page *rod.Page, slider *rod.Element, distanceX float64) error {
+	// Obtém a posição atual do slider usando Shape()
 	shape, err := slider.Shape()
 	if err != nil {
 		return fmt.Errorf("erro obtendo posição do slider: %w", err)
 	}
 
+	// Usa o primeiro quad (retângulo) da shape
 	if len(shape.Quads) == 0 {
 		return fmt.Errorf("slider não tem dimensões válidas")
 	}
 
 	quad := shape.Quads[0]
+	// Calcula o centro do elemento
 	startX := (quad[0] + quad[2]) / 2
 	startY := (quad[1] + quad[5]) / 2
 
+	// Ponto final
 	endX := startX + distanceX
-	endY := startY + randomFloat(-5, 5)
+	endY := startY + randomFloat(-5, 5) // Pequeno desvio vertical para parecer humano
 
-	fmt.Printf(" Iniciando arrasto de (%.2f, %.2f) para (%.2f, %.2f)\n",
+	fmt.Printf("[Mouse] Iniciando arrasto de (%.2f, %.2f) para (%.2f, %.2f)\n",
 		startX, startY, endX, endY)
 
 	// Move o mouse para o início do slider
@@ -52,19 +54,10 @@ func DragSlider(page *rod.Page, slider *rod.Element, distanceX float64) error {
 
 	time.Sleep(time.Duration(randomInt(50, 150)) * time.Millisecond)
 
-	// OPEN CORE: Escolhe modo básico ou premium
-	if captchaConfig.Movement.Enabled {
-		fmt.Println("[PREMIUM] Usando movimento humanizado avançado")
-		if err := dragWithHumanMovement(page, startX, startY, endX, endY); err != nil {
-			page.Mouse.Up("left", 1)
-			return err
-		}
-	} else {
-		fmt.Println("[OPEN] Usando movimento linear básico")
-		if err := dragWithBasicMovement(page, startX, startY, endX, endY); err != nil {
-			page.Mouse.Up("left", 1)
-			return err
-		}
+	// Arrasta usando movimento humano
+	if err := dragWithHumanMovement(page, startX, startY, endX, endY); err != nil {
+		page.Mouse.Up("left", 1) // Garante que solta o mouse mesmo se houver erro
+		return err
 	}
 
 	time.Sleep(time.Duration(randomInt(50, 100)) * time.Millisecond)
@@ -74,14 +67,19 @@ func DragSlider(page *rod.Page, slider *rod.Element, distanceX float64) error {
 		return fmt.Errorf("erro soltando mouse: %w", err)
 	}
 
-	fmt.Println(" Arrasto concluído com sucesso")
+	fmt.Println("[Mouse] Arrasto concluído com sucesso")
 	return nil
 }
 
+// moveMouseHuman move o mouse até uma posição usando curva de Bézier
 func moveMouseHuman(page *rod.Page, targetX, targetY float64) error {
+	// Obtém posição atual (assumimos que começa em 0,0 ou última posição)
+	// O Rod não expõe a posição atual facilmente, então começamos do canto
 	startX, startY := 0.0, 0.0
+
 	steps := randomInt(20, 40)
 
+	// Pontos de controle aleatórios para a curva de Bézier
 	cp1X := startX + (targetX-startX)*randomFloat(0.2, 0.4)
 	cp1Y := startY + (targetY-startY)*randomFloat(-0.3, 0.3)
 	cp2X := startX + (targetX-startX)*randomFloat(0.6, 0.8)
@@ -90,9 +88,11 @@ func moveMouseHuman(page *rod.Page, targetX, targetY float64) error {
 	for i := 0; i <= steps; i++ {
 		t := float64(i) / float64(steps)
 
+		// Curva de Bézier cúbica
 		x := cubicBezier(t, startX, cp1X, cp2X, targetX)
 		y := cubicBezier(t, startY, cp1Y, cp2Y, targetY)
 
+		// Adiciona pequeno ruído (tremor humano)
 		x += randomFloat(-1, 1)
 		y += randomFloat(-1, 1)
 
@@ -108,31 +108,8 @@ func moveMouseHuman(page *rod.Page, targetX, targetY float64) error {
 	return nil
 }
 
-// dragWithBasicMovement movimento linear simples (OPEN SOURCE)
-func dragWithBasicMovement(page *rod.Page, startX, startY, endX, endY float64) error {
-	// Configuração básica (open source)
-	steps := randomInt(captchaConfig.Delays.StepsMin, captchaConfig.Delays.StepsMax)
-
-	deltaX := (endX - startX) / float64(steps)
-	deltaY := (endY - startY) / float64(steps)
-
-	for i := 0; i <= steps; i++ {
-		x := startX + deltaX*float64(i)
-		y := startY + deltaY*float64(i)
-
-		if err := page.Mouse.MoveLinear(proto.Point{X: x, Y: y}, 1); err != nil {
-			return fmt.Errorf("erro durante arrasto: %w", err)
-		}
-
-		// Delay fixo (open source)
-		delay := randomInt(captchaConfig.Delays.MinMS, captchaConfig.Delays.MaxMS)
-		time.Sleep(time.Duration(delay) * time.Millisecond)
-	}
-
-	return nil
-}
-
-// dragWithHumanMovement arrasta usando Bézier, overshoot, tremor (PREMIUM - CLOSED SOURCE)
+// dragWithHumanMovement arrasta o mouse de um ponto a outro simulando movimento humano
+// Implementa Lei de Fitts, curva de Bézier, easing functions e overshoot
 func dragWithHumanMovement(page *rod.Page, startX, startY, endX, endY float64) error {
 	// Lei de Fitts: MT = a + b * log2(D/W + 1)
 	// Onde D = distância, W = largura do alvo
@@ -153,7 +130,7 @@ func dragWithHumanMovement(page *rod.Page, startX, startY, endX, endY float64) e
 		steps = 150
 	}
 
-	fmt.Printf(" Lei de Fitts: distância=%.1f, steps=%d, índice=%.2f\n",
+	fmt.Printf("[Mouse] Lei de Fitts: distância=%.1f, steps=%d, índice=%.2f\n",
 		distance, steps, fittsIndex)
 
 	// Pontos de controle para criar uma curva natural (mais variação)
@@ -182,14 +159,14 @@ func dragWithHumanMovement(page *rod.Page, startX, startY, endX, endY float64) e
 		delay := calculateDragDelay(t)
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 
-		// Micro-pausas apenas se premium
-		if captchaConfig.Movement.MicroPauses && i > 0 && i%randomInt(12, 20) == 0 {
+		// Ocasionalmente faz micro-pausas (comportamento humano) - mais frequentes
+		if i > 0 && i%randomInt(12, 20) == 0 {
 			time.Sleep(time.Duration(randomInt(20, 50)) * time.Millisecond)
 		}
 	}
 
-	// Overshoot apenas se premium
-	if captchaConfig.Movement.Overshoot && randomFloat(0, 1) > 0.3 {
+	// Overshoot: humanos geralmente passam um pouco do alvo e corrigem
+	if randomFloat(0, 1) > 0.3 { // 70% de chance de overshoot
 		overshootX := endX + randomFloat(3, 8)
 
 		// Vai um pouco além
