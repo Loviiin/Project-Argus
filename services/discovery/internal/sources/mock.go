@@ -2,24 +2,22 @@ package sources
 
 import "fmt"
 
-type MockSource struct {
-	Calls []string
-}
+type MockSource struct{}
 
 func (m *MockSource) Name() string {
 	return "MockSource"
 }
 
-func (m *MockSource) FetchRecent(hashtag string) ([]VideoItem, error) {
-	m.Calls = append(m.Calls, hashtag)
-	fmt.Printf("[MockSource] Buscando por #%s...\n", hashtag)
-
-	return []VideoItem{
+func (m *MockSource) Fetch(query string) ([]RawVideoMetadata, error) {
+	fmt.Printf("[MockSource] Buscando por #%s...\n", query)
+	return []RawVideoMetadata{
 		{
-			URL:      "https://www.youtube.com/shorts/IknOw-k2nB0",
-			Platform: "YouTube shorts",
-			Author:   "@tester",
+			ID:          "mock-video-1",
+			Title:       "Mock Video",
+			Description: "Descrição de teste",
+			URL:         "https://www.youtube.com/shorts/IknOw-k2nB0",
+			Author:      "tester",
+			Comments:    []string{"nice", "cool"},
 		},
-		// Adicione mais se quiser testar volume
 	}, nil
 }

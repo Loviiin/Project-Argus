@@ -1,57 +1,78 @@
 # Project Argus
 
-Project Argus is a small OSINT pipeline built of multiple services:
+**🔒 PRIVATE REPOSITORY - Full Source Code**
 
-- Vision (Python + PaddleOCR): extracts text from images
-- Parser (Go): finds Discord invites in text and persists metadata in Postgres
-- Scraper (Node.js + Playwright): publishes scrape jobs to NATS (example publisher)
-- Infra (Docker): NATS JetStream, Postgres, Redis, Meilisearch
+OSINT pipeline with advanced TikTok scraping and captcha solving capabilities.
 
-This repo is set up to run inside a devcontainer on Ubuntu. The commands below assume you are in a devcontainer terminal at the workspace root.
+## ⚠️ Important: Open Core Strategy
+
+This repository contains the **complete premium version** with:
+
+- Advanced humanized mouse movement (Bézier curves, overshoot, tremor)
+- TLS fingerprinting and anti-detection
+- Gaussian delay distributions
+- 80-85% captcha success rate
+
+**For open source version**: See `OPEN_CORE_STRATEGY.md` for how to extract the basic version.
+
+---
+
+## Services
+
+- **Discovery** (Go): TikTok scraper with advanced captcha solving
+- **Vision** (Python): OpenCV-based captcha detection (can be open sourced)
+- **Parser** (Go): Discord invite extraction and metadata persistence
+- **Infrastructure**: NATS, Redis, PostgreSQL, Meilisearch
+
+---
 
 ## Quick Start
 
-We use a `Makefile` to simplify the workflow.
-
-### 1. Configure the Application
-
-Copy the example configuration:
+### 1. Configure
 
 ```bash
 cp config/config.example.yaml config/config.yaml
+# Edit config.yaml with your settings
 ```
 
-Edit `config/config.yaml` with your credentials. **Do not commit secrets.**
+**Premium Features** are controlled via `config.yaml`:
 
-### 2. Setup & Infrastructure
+- Set `captcha.humanized_movement.enabled: true` for advanced movement
+- Set `captcha.delays.type: "gaussian"` for anti-detection timing
 
-Install dependencies and start the Docker infrastructure:
+### 2. Setup & Start Infrastructure
 
 ```bash
-make setup  # Installs deps for Go, Node, and Python
-make up     # Starts NATS, Postgres, Redis, Meilisearch
+make setup  # Install all dependencies
+make up     # Start Docker services (NATS, Redis, PostgreSQL, Meilisearch)
 ```
 
 ### 3. Run Services
 
-Open separate terminals for each service:
-
 ```bash
-make run-parser   # Terminal 1: Parser Service (Go)
-make run-scraper  # Terminal 2: Scraper Service (Node)
-make run-vision   # Terminal 3: Vision Service (Python)
+# Terminal 1: Captcha Solver (OpenCV)
+make run-captcha-solver
+
+# Terminal 2: Discovery (TikTok Scraper)
+make run-discovery
+
+# Terminal 3: Parser (optional - for Discord extraction)
+make run-parser
 ```
 
-### 4. Testing
-
-We have several levels of testing available via Makefile:
+### 4. Test Captcha System
 
 ```bash
-make test-full            # Integration: Validates the full flow (Scraper -> Vision -> Parser)
+make test-captcha  # Automated test with Vision + Discovery
+```
+
+---
+
 make test-scraper-browser # E2E: Tests Scraper browser automation (Playwright)
-make test-vision-job      # Unit/Integration: Tests Vision job processing mock
-make send-payload         # Manual: Sends a fake payload from Vision -> Parser
-```
+make test-vision-job # Unit/Integration: Tests Vision job processing mock
+make send-payload # Manual: Sends a fake payload from Vision -> Parser
+
+````
 
 ### 5. Verification
 
@@ -59,7 +80,7 @@ Check if data was inserted into Postgres:
 
 ```bash
 docker exec -i banco-argus-dev psql -U argus-user -d argus-post-db -c "SELECT source_url, discord_invite_code, LEFT(raw_ocr_text, 50) as preview FROM artifacts ORDER BY processed_at DESC LIMIT 5;"
-```
+````
 
 ## Available Make Commands
 

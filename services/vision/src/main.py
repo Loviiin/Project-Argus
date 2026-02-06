@@ -9,6 +9,7 @@ import easyocr
 import numpy as np
 import nats
 from nats.errors import ConnectionClosedError, TimeoutError, NoRespondersError
+from captcha_solver import solve_captcha
 
 print("Carregando modelo OCR (pode demorar um pouco)...")
 reader = easyocr.Reader(['en', 'pt'], gpu=True) 
@@ -126,6 +127,34 @@ async def main():
             await msg.nak()
 
     await js.subscribe("jobs.analyse", cb=message_handler, durable="vision-worker")
+
+    # Handler para resolver captchas
+    async def captcha_handler(msg):
+        try:
+            data = json.loads(msg.data.decode())
+            print(f"[Captcha] Recebida requisição de captcha")
+            
+            # Resolve o captcha
+            result = solve_captcha(data)
+            
+            # Envia resposta
+            response = json.dumps(result).encode()
+            await msg.respond(response)
+            
+            status = "✓" if result.get('success') else "✗"
+            print(f"[Captcha] {status} Resposta enviada: {result.get('distance_x', 0):.2f}px")
+            
+        except Exception as e:
+            print(f"[Captcha] Erro: {e}")
+            error_response = {
+                'success': False,
+                'distance_x': 0,
+                'error': str(e)
+            }
+            await msg.respond(json.dumps(error_response).encode())
+    
+    await nc.subscribe("jobs.captcha.solve", cb=captcha_handler)
+    print("✓ Subscrito em jobs.captcha.solve para resolver captchas")
 
     stop = asyncio.Future()
     await stop

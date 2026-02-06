@@ -1,8 +1,6 @@
 package main
 
 import (
-	"discovery/internal/repository"
-	"discovery/internal/service"
 	"fmt"
 	"log"
 	"os"
@@ -10,17 +8,19 @@ import (
 	"syscall"
 	"time"
 
+	"discovery/internal/repository"
+	"discovery/internal/service"
+	"discovery/internal/sources"
+
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/nats-io/nats.go"
 )
 
 func main() {
-	// 1. Carrega Configuração Unificada
 	cfg := config.LoadConfig()
 
-	fmt.Println("Argus Discovery Service Iniciando...")
+	fmt.Println("Argus Discovery Service (Go-Rod) iniciando...")
 
-	// 2. Conecta Infra (NATS + Redis) usando Config
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {
 		log.Fatal("Erro NATS:", err)
@@ -29,21 +29,20 @@ func main() {
 	defer nc.Close()
 
 	dedup := repository.NewDeduplicator(cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
-	defer dedup.Close()
+	log.Println("Inicializando driver do navegador...")
+	tikTokSource := sources.NewTikTokRodSource()
 
-	// 3. Inicializa Serviço
-	svc := service.NewDiscoveryService(dedup, js)
+	svc := service.NewDiscoveryService(dedup, js, []sources.Source{tikTokSource})
 
-	// 4. Loop de Execução
 	interval := time.Duration(cfg.Discovery.Interval) * time.Second
 	if interval == 0 {
-		interval = 30 * time.Second
+		interval = 30 * time.Minute
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	cycle := func() {
-		fmt.Println("--- Iniciando ciclo de busca ---")
+		fmt.Println("\n--- Iniciando ciclo de busca ---")
 		svc.Run(cfg.Discovery.Hashtags)
 	}
 
@@ -52,7 +51,7 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	fmt.Println("Discovery Service rodando! (Ctrl+C para sair)")
+	fmt.Println("Discovery Service rodando! Aguardando jobs...")
 
 	for {
 		select {

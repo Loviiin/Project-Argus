@@ -5,6 +5,12 @@ config/*.json
 config/config.yaml
 !config/*.sample.json
 !config/scrapers.sample.json
+!config/config.example.yaml
+
+# Secrets
+*.key
+*.pem
+*.crt
 
 # --- Dependencies ---
 node_modules/
