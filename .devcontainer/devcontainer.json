@@ -3,10 +3,9 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
-
   "features": {
     "ghcr.io/devcontainers/features/go:1": {
-      "version": "1.25" 
+      "version": "1.25"
     },
     "ghcr.io/devcontainers/features/python:1": {
       "version": "3.11"
@@ -21,12 +20,20 @@
       "username": "vscode"
     }
   },
-
-  "forwardPorts": [4222, 5432, 7700, 6379, 5900],
-
-
+  "forwardPorts": [
+    4222,
+    5432,
+    7700,
+    6379,
+    5900,
+    6080,
+    9222
+  ],
+  "remoteEnv": {
+    "DISPLAY": ":99"
+  },
+  "postStartCommand": "bash /usr/local/bin/start-vnc.sh",
   "postCreateCommand": "bash .devcontainer/setup.sh",
-
   "customizations": {
     "vscode": {
       "extensions": [
@@ -48,6 +55,5 @@
       }
     }
   },
-
   "remoteUser": "vscode"
 }

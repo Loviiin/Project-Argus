@@ -4,6 +4,9 @@ nats-py
 # Processamento de Imagem
 numpy
 opencv-python-headless
+Pillow
+scikit-image
 
 # IA / OCR
 easyocr
+

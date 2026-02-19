@@ -1,12 +1,8 @@
 package sources
 
-type VideoItem struct {
-	URL      string
-	Platform string
-	Author   string
-}
-
+// Source é a interface que qualquer fonte de dados (TikTok, YouTube) deve implementar.
 type Source interface {
 	Name() string
-	FetchRecent(hashtag string) ([]VideoItem, error)
+	// Fetch busca dados baseados em um termo ou URL e retorna uma lista de metadados.
+	Fetch(query string) ([]RawVideoMetadata, error)
 }

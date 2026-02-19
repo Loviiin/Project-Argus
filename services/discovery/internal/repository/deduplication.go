@@ -24,12 +24,18 @@ func NewDeduplicator(address, password string, db int) *Deduplicator {
 func (d *Deduplicator) IsNew(ctx context.Context, url string) (bool, error) {
 	key := fmt.Sprintf("argus:seen:%s", url)
 
-	created, err := d.rdb.SetNX(ctx, key, "1", 7*24*time.Hour).Result()
+	exists, err := d.rdb.Exists(ctx, key).Result()
 	if err != nil {
 		return false, err
 	}
 
-	return created, nil
+	return exists == 0, nil
+}
+
+func (d *Deduplicator) MarkAsSeen(ctx context.Context, url string) error {
+	key := fmt.Sprintf("argus:seen:%s", url)
+	_, err := d.rdb.Set(ctx, key, "1", 7*24*time.Hour).Result()
+	return err
 }
 
 func (d *Deduplicator) Close() error {

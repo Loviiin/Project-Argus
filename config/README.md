@@ -1,33 +1,66 @@
-# Configuration
+# Config Directory
 
-Open Core policy: configurations and credentials are not committed. Use the example file and copy it locally:
+Contains application configuration files.
+
+## Files
+
+- `config.yaml` - **Active config (gitignored)**
+- `config.example.yaml` - Template with all options documented
+
+## Setup
 
 ```bash
 cp config/config.example.yaml config/config.yaml
+# Edit config.yaml with your settings
 ```
 
-Example contents (placeholders only):
+## Important Sections
+
+### Premium Features
+
+The `captcha` section controls advanced anti-detection features:
 
 ```yaml
-app:
-  env: "local"
+captcha:
+  humanized_movement:
+    enabled: true # Toggle premium features
+```
 
-discord:
-  token: "your_token_here" # optional; leave empty for anonymous
+**When enabled: true**
 
-database:
-  url: "postgres://your_user:postgres_password@127.0.0.1:5432/argus-post-db?sslmode=disable"
+- Uses Bézier curves, overshoot, tremor
+- Gaussian delay distribution
+- Success rate: ~80-85%
 
-targets:
-  hashtags:
-    - "funnycats"
-    - "dailyvlog"
-    - "tutorial"
+**When enabled: false**
 
-meilisearch:
-  host: "http://"
-  key: "masterKey"
-  index: "artifacts"
+- Basic linear movement
+- Fixed delays
+- Success rate: ~30-40%
+- **Can be open sourced**
+
+## Security
+
+**DO NOT COMMIT**:
+
+- `config.yaml` (contains your settings)
+- Any files with real credentials
+
+**SAFE TO COMMIT**:
+
+- `config.example.yaml` (template with all premium features documented)
+
+## For Open Source Release
+
+When creating public version, remove from `config.example.yaml`:
+
+- All `captcha.humanized_movement` specific values
+- All `captcha.delays` numbers
+- All `captcha.anti_detection` section
+
+Replace with basic config only.
+
 ```
 
 Environment variables can override settings. Parser enables `viper.AutomaticEnv()` with `.` replaced by `_`, so `DATABASE_URL` overrides `database.url`.
+```
