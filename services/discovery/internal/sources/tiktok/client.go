@@ -5,26 +5,26 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
 )
 
 const (
-	fetchTimeout     = 45 * time.Second
-	perVideoTimeout  = 20 * time.Second
-	captchaWaitLimit = 60 * time.Second
+	fetchTimeout    = 90 * time.Second
+	perVideoTimeout = 20 * time.Second
 )
 
-// Source implementa a lógica de scraping do TikTok usando Go-Rod
 type Source struct {
 	browser *rod.Browser
 }
 
-// NewSource cria uma nova instância do scraper TikTok
-// Inicializa o browser com stealth mode e devtools habilitado
+const maxVideos = 15
+
 func NewSource() *Source {
 	path, _ := launcher.LookPath()
 
@@ -38,17 +38,13 @@ func NewSource() *Source {
 
 	go browser.ServeMonitor(":9222")
 
-	return &Source{
-		browser: browser,
-	}
+	return &Source{browser: browser}
 }
 
-// Name retorna o nome identificador do source
 func (s *Source) Name() string {
 	return "TikTok-Rod-Full"
 }
 
-// Fetch faz: Busca na Tag -> Coleta URLs -> Extrai Comentários (XHR Intercept)
 func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
 	page, err := stealth.Page(s.browser)
 	if err != nil {
@@ -58,9 +54,7 @@ func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
 
 	start := time.Now()
 
-	// Se a query é uma URL direta, processa apenas esse vídeo
 	if strings.Contains(query, "tiktok.com") {
-		fmt.Printf("[Rod] URL direta detectada: %s\n", query)
 		meta, err := s.processVideo(query)
 		if err != nil {
 			return nil, err
@@ -68,53 +62,66 @@ func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
 		return []RawVideoMetadata{meta}, nil
 	}
 
-	// Caso contrário, busca pela tag
 	tagURL := fmt.Sprintf("https://www.tiktok.com/tag/%s", query)
-	fmt.Printf("[Rod] Navegando para tag: %s\n", tagURL)
+	fmt.Printf("[Rod] tag: %s\n", tagURL)
 
 	if err := page.Timeout(fetchTimeout).Navigate(tagURL); err != nil {
 		return nil, err
 	}
 	page.Timeout(15 * time.Second).WaitLoad()
-
-	// Aguarda a página renderizar completamente
-	fmt.Println("[Rod] Aguardando renderização da página...")
 	time.Sleep(3 * time.Second)
 
-	// PRIMEIRO RELOAD: Força reload para garantir que Rod DevTools esteja sincronizado
-	fmt.Println("[Rod] Reload preventivo (garante sincronização com DevTools)...")
 	if err := page.Reload(); err != nil {
-		fmt.Printf("[Rod] Aviso: Erro no reload: %v\n", err)
+		fmt.Printf("[Rod] reload error: %v\n", err)
 	}
 	page.Timeout(15 * time.Second).WaitLoad()
 	time.Sleep(2 * time.Second)
 
-	// Verifica se há captcha na página de listagem
 	if isCaptchaPresent(page) {
-		fmt.Println("[Rod] CAPTCHA detectado na página de tag.")
 		if err := s.handleCaptcha(page); err != nil {
-			return nil, fmt.Errorf("falha ao resolver captcha: %w", err)
+			return nil, fmt.Errorf("captcha: %w", err)
 		}
-		// Após resolver captcha, aguarda a página recarregar
-		fmt.Println("[Rod] Aguardando página recarregar após captcha...")
-		page.Timeout(10 * time.Second).WaitLoad()
+		start = time.Now()
+		page.Timeout(15 * time.Second).WaitLoad()
 		time.Sleep(3 * time.Second)
 	}
 
-	// Scroll para carregar mais vídeos
-	for i := 0; i < 3; i++ {
-		page.Mouse.Scroll(0, 1000, 1)
-		time.Sleep(2 * time.Second)
+	if _, err := page.Timeout(15 * time.Second).Element(`a[href*="/video/"]`); err != nil {
+		fmt.Printf("[Rod] nenhum video detectado ainda: %v\n", err)
 	}
+
+	for i := 0; i < 8; i++ {
+		page.Mouse.Scroll(0, 1200, 1)
+		time.Sleep(1500 * time.Millisecond)
+		if i == 3 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+	page.Eval(`() => window.scrollTo(0, 0)`)
+	time.Sleep(1 * time.Second)
 
 	if time.Since(start) > fetchTimeout {
-		return nil, fmt.Errorf("timeout atingido ao coletar vídeos na tag")
+		return nil, fmt.Errorf("timeout ao coletar videos")
 	}
 
-	// Coleta todos os links de vídeo
-	videoLinks, err := page.Timeout(5 * time.Second).Elements("a")
+	videoLinks, err := page.Timeout(5 * time.Second).Elements(`a[href*="/video/"]`)
 	if err != nil {
-		return nil, fmt.Errorf("erro buscando elementos a: %w", err)
+		allLinks, err2 := page.Timeout(5 * time.Second).Elements("a")
+		if err2 != nil {
+			return nil, fmt.Errorf("erro buscando links: %w", err2)
+		}
+		var urlsToVisit []string
+		for _, link := range allLinks {
+			href, herr := link.Attribute("href")
+			if herr == nil && href != nil && strings.Contains(*href, "/video/") {
+				urlsToVisit = append(urlsToVisit, *href)
+			}
+		}
+		urlsToVisit = unique(urlsToVisit)
+		if len(urlsToVisit) > maxVideos {
+			urlsToVisit = urlsToVisit[:maxVideos]
+		}
+		return s.processVideos(urlsToVisit)
 	}
 
 	var urlsToVisit []string
@@ -124,49 +131,67 @@ func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
 			urlsToVisit = append(urlsToVisit, *href)
 		}
 	}
-
 	urlsToVisit = unique(urlsToVisit)
-	if len(urlsToVisit) > 5 {
-		urlsToVisit = urlsToVisit[:5]
+	if len(urlsToVisit) > maxVideos {
+		urlsToVisit = urlsToVisit[:maxVideos]
 	}
 
-	fmt.Printf("[Rod] Encontrados %d vídeos únicos. Iniciando extração profunda...\n", len(urlsToVisit))
+	fmt.Printf("[Rod] %d videos unicos encontrados\n", len(urlsToVisit))
+	return s.processVideos(urlsToVisit)
+}
+
+func (s *Source) processVideos(urls []string) ([]RawVideoMetadata, error) {
 	var results []RawVideoMetadata
-
-	// Processa cada vídeo individualmente
-	for _, videoURL := range urlsToVisit {
+	for _, videoURL := range urls {
 		time.Sleep(1 * time.Second)
-
-		fmt.Printf("[Rod] Processando: %s\n", videoURL)
 		meta, err := s.processVideo(videoURL)
 		if err != nil {
-			fmt.Printf("Erro processando %s: %v\n", videoURL, err)
+			fmt.Printf("[Rod] erro em %s: %v\n", videoURL, err)
 			continue
 		}
 		results = append(results, meta)
 	}
-
 	return results, nil
 }
 
-// processVideo abre uma aba nova, intercepta a API de comentários e retorna os dados
 func (s *Source) processVideo(urlStr string) (RawVideoMetadata, error) {
 	page, _ := stealth.Page(s.browser)
 	defer page.Close()
 
 	router := page.HijackRequests()
 
-	var capturedComments []string
-	// Intercepta chamadas à API de comentários do TikTok
+	var mu sync.Mutex
+	var capturedComments []RawComment
+
 	router.MustAdd("*/comment/list/*", func(ctx *rod.Hijack) {
 		ctx.MustLoadResponse()
 		body := ctx.Response.Payload().Body
 		var resp TikTokAPIResponse
 		if err := json.Unmarshal(body, &resp); err == nil {
+			mu.Lock()
 			for _, c := range resp.Comments {
-				cleanText := strings.ReplaceAll(c.Text, "\n", " ")
-				capturedComments = append(capturedComments, cleanText)
+				capturedComments = append(capturedComments, RawComment{
+					Nick: c.User.UniqueId,
+					Text: strings.ReplaceAll(c.Text, "\n", " "),
+				})
 			}
+			mu.Unlock()
+		}
+	})
+
+	router.MustAdd("*/comment/reply/list/*", func(ctx *rod.Hijack) {
+		ctx.MustLoadResponse()
+		body := ctx.Response.Payload().Body
+		var resp TikTokAPIResponse
+		if err := json.Unmarshal(body, &resp); err == nil {
+			mu.Lock()
+			for _, c := range resp.Comments {
+				capturedComments = append(capturedComments, RawComment{
+					Nick: c.User.UniqueId,
+					Text: "[reply] " + strings.ReplaceAll(c.Text, "\n", " "),
+				})
+			}
+			mu.Unlock()
 		}
 	})
 
@@ -176,36 +201,65 @@ func (s *Source) processVideo(urlStr string) (RawVideoMetadata, error) {
 		return RawVideoMetadata{}, err
 	}
 	page.Timeout(10 * time.Second).WaitLoad()
+	time.Sleep(2 * time.Second)
 
-	// Aguarda a página e as APIs carregarem completamente
-	fmt.Println("[Rod] Aguardando carregamento completo do vídeo...")
-	time.Sleep(5 * time.Second)
+	if err := page.Reload(); err != nil {
+		fmt.Printf("[Rod] reload error: %v\n", err)
+	} else {
+		page.Timeout(10 * time.Second).WaitLoad()
+	}
+	time.Sleep(3 * time.Second)
 
-	// Verifica se há captcha na página do vídeo
 	if isCaptchaPresent(page) {
-		fmt.Println("[Rod] CAPTCHA detectado no vídeo.")
 		if err := s.handleCaptcha(page); err != nil {
 			return RawVideoMetadata{}, err
 		}
-		// Após resolver captcha, aguarda a página recarregar
-		fmt.Println("[Rod] Aguardando vídeo recarregar após captcha...")
 		page.Timeout(10 * time.Second).WaitLoad()
 		time.Sleep(3 * time.Second)
 	}
 
-	// Scroll para carregar comentários
-	go func() {
-		time.Sleep(2 * time.Second)
-		page.Mouse.Scroll(0, 500, 1)
-	}()
-
-	time.Sleep(5 * time.Second)
-
-	// Extrai a descrição do vídeo
-	descText := ""
-	if el, err := page.Timeout(3 * time.Second).Element("h1"); err == nil {
-		descText, _ = el.Text()
+	commentSelectors := []string{
+		`[data-e2e="comment-icon"]`,
+		`[data-e2e="browse-comment"]`,
+		`button[aria-label*="omment"]`,
+		`strong[data-e2e="comment-count"]`,
+		`span[data-e2e="comment-count"]`,
 	}
+	for _, sel := range commentSelectors {
+		if el, err := page.Timeout(2 * time.Second).Element(sel); err == nil {
+			if err2 := el.Click(proto.InputMouseButtonLeft, 1); err2 == nil {
+				fmt.Printf("[Rod] comentarios clicados via: %s\n", sel)
+				break
+			}
+		}
+	}
+
+	for pass := 0; pass < 4; pass++ {
+		time.Sleep(1500 * time.Millisecond)
+		page.Eval(`() => {
+			const panel = document.querySelector(
+				'[data-e2e="comment-list"], [class*="DivCommentListContainer"], [class*="CommentListScroller"]'
+			);
+			if (panel) { panel.scrollTop += 800; }
+			else { window.scrollBy(0, 400); }
+		}`)
+		time.Sleep(1 * time.Second)
+
+		replyBtns, _ := page.Elements(
+			`[data-e2e="view-more-replies"], [class*="SpanViewMoreReply"], span[class*="view-more"]`,
+		)
+		for _, btn := range replyBtns {
+			_ = btn.Click(proto.InputMouseButtonLeft, 1)
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	time.Sleep(3 * time.Second)
+
+	descText := extractDescription(page)
+
+	fmt.Printf("[Rod] video=%s desc=%q comentarios=%d\n",
+		extractID(urlStr), truncate(descText, 60), len(capturedComments))
 
 	return RawVideoMetadata{
 		URL:         urlStr,
@@ -215,15 +269,44 @@ func (s *Source) processVideo(urlStr string) (RawVideoMetadata, error) {
 	}, nil
 }
 
-// handleCaptcha orquestra o processo de resolução do captcha
-func (s *Source) handleCaptcha(page *rod.Page) error {
-	info, _ := page.Info()
-	if info != nil {
-		fmt.Printf("🌐 [Captcha] URL atual: %s\n", info.URL)
+func extractDescription(page *rod.Page) string {
+	for _, sel := range []string{
+		`[data-e2e="browse-video-desc"]`,
+		`[data-e2e="video-desc"]`,
+		`[data-e2e="new-desc-paragraph"]`,
+	} {
+		if el, err := page.Timeout(2 * time.Second).Element(sel); err == nil {
+			if text, err := el.Text(); err == nil && text != "" {
+				return text
+			}
+		}
 	}
 
+	if el, err := page.Timeout(2 * time.Second).Element(`h1`); err == nil {
+		if text, err := el.Text(); err == nil && text != "" {
+			return text
+		}
+	}
+
+	if el, err := page.Timeout(1 * time.Second).Element(`meta[property="og:description"]`); err == nil {
+		if content, err := el.Attribute("content"); err == nil && content != nil && *content != "" {
+			return *content
+		}
+	}
+
+	return ""
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+func (s *Source) handleCaptcha(page *rod.Page) error {
 	captchaType := detectCaptchaType(page)
-	fmt.Printf("🎯 [Captcha] Tipo detectado: %s\n", captchaType)
+	fmt.Printf("[Captcha] tipo: %s\n", captchaType)
 
 	var err error
 	switch captchaType {
@@ -232,12 +315,11 @@ func (s *Source) handleCaptcha(page *rod.Page) error {
 	case CaptchaTypePuzzle:
 		err = handlePuzzleCaptcha(page)
 	default:
-		fmt.Println("⚠️  [Captcha] Tipo desconhecido. Aguardando resolução manual...")
 		err = waitCaptchaResolution(page, 5*time.Minute)
 	}
 
 	if err != nil {
-		return fmt.Errorf("erro resolvendo captcha: %w", err)
+		return fmt.Errorf("captcha: %w", err)
 	}
 
 	time.Sleep(3 * time.Second)
@@ -246,11 +328,9 @@ func (s *Source) handleCaptcha(page *rod.Page) error {
 		return ErrCaptcha
 	}
 
-	fmt.Println("✅ [Captcha] Captcha resolvido com sucesso!")
 	return nil
 }
 
-// isCaptchaPresent tenta detectar páginas de verificação/segurança do TikTok
 func isCaptchaPresent(page *rod.Page) bool {
 	info, _ := page.Info()
 	urlStr := ""
@@ -258,34 +338,28 @@ func isCaptchaPresent(page *rod.Page) bool {
 		urlStr = info.URL
 	}
 
-	// Verifica pela URL
 	if strings.Contains(strings.ToLower(urlStr), "verify") ||
 		strings.Contains(strings.ToLower(urlStr), "captcha") {
 		return true
 	}
 
-	// Verifica por iframe de captcha
 	if _, err := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"]`); err == nil {
 		return true
 	}
 
-	// Verifica por containers de captcha específicos do TikTok
-	captchaSelectors := []string{
+	for _, sel := range []string{
 		".captcha_verify_container",
 		".captcha_verify_img_slide",
 		"[class*='captcha']",
 		"[class*='secsdk-captcha']",
 		"[id*='captcha']",
 		"div[class*='verify']",
-	}
-
-	for _, selector := range captchaSelectors {
-		if _, err := page.Timeout(1 * time.Second).Element(selector); err == nil {
+	} {
+		if _, err := page.Timeout(1 * time.Second).Element(sel); err == nil {
 			return true
 		}
 	}
 
-	// Verifica por texto "Drag the slider" específico do captcha
 	if _, err := page.Timeout(1*time.Second).ElementR("*", "(?i)(drag.*slider|fit.*puzzle|verify|captcha)"); err == nil {
 		return true
 	}
@@ -293,20 +367,18 @@ func isCaptchaPresent(page *rod.Page) bool {
 	return false
 }
 
-// unique remove duplicatas de um slice de strings
 func unique(strSlice []string) []string {
-	keys := make(map[string]bool)
-	list := []string{}
-	for _, entry := range strSlice {
-		if _, value := keys[entry]; !value {
-			keys[entry] = true
-			list = append(list, entry)
+	seen := make(map[string]bool)
+	var result []string
+	for _, s := range strSlice {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
 		}
 	}
-	return list
+	return result
 }
 
-// extractID extrai o ID do vídeo da URL
 func extractID(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err == nil {

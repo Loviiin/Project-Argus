@@ -2,14 +2,20 @@ package tiktok
 
 import "errors"
 
+// RawComment representa um comentário com o nick do autor
+type RawComment struct {
+	Nick string `json:"nick"` // username TikTok do autor
+	Text string `json:"text"` // texto do comentário
+}
+
 // RawVideoMetadata representa os metadados brutos extraídos de um vídeo do TikTok
 type RawVideoMetadata struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	URL         string   `json:"url"`
-	Author      string   `json:"author"`
-	Comments    []string `json:"comments"`
+	ID          string       `json:"id"`
+	Title       string       `json:"title"`
+	Description string       `json:"description"`
+	URL         string       `json:"url"`
+	Author      string       `json:"author"`
+	Comments    []RawComment `json:"comments"`
 }
 
 // TikTokAPIResponse representa a resposta da API interna do TikTok para comentários

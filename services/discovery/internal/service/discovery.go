@@ -3,8 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
+	"strings"
+	"sync"
 
 	"discovery/internal/repository"
 	"discovery/internal/sources"
@@ -13,16 +14,21 @@ import (
 )
 
 type DiscoveryService struct {
-	dedup   *repository.Deduplicator
-	js      nats.JetStreamContext
-	sources []sources.Source
+	dedup       *repository.Deduplicator
+	js          nats.JetStreamContext
+	sources     []sources.Source
+	concurrency int
 }
 
-func NewDiscoveryService(dedup *repository.Deduplicator, js nats.JetStreamContext, srcs []sources.Source) *DiscoveryService {
+func NewDiscoveryService(dedup *repository.Deduplicator, js nats.JetStreamContext, srcs []sources.Source, workers int) *DiscoveryService {
+	if workers <= 0 {
+		workers = 1
+	}
 	return &DiscoveryService{
-		dedup:   dedup,
-		js:      js,
-		sources: srcs,
+		dedup:       dedup,
+		js:          js,
+		sources:     srcs,
+		concurrency: workers,
 	}
 }
 
@@ -38,51 +44,66 @@ func (s *DiscoveryService) Run(hashtags []string) {
 	ctx := context.Background()
 
 	for _, src := range s.sources {
+		sem := make(chan struct{}, s.concurrency)
+		var wg sync.WaitGroup
+
 		for _, tag := range hashtags {
-			log.Printf("Buscando '%s' via %s...", tag, src.Name())
+			wg.Add(1)
+			sem <- struct{}{}
 
-			videos, err := src.Fetch(tag)
-			if err != nil {
-				log.Printf("Erro ao buscar na fonte %s: %v", src.Name(), err)
-				continue
-			}
+			go func(tag string) {
+				defer wg.Done()
+				defer func() { <-sem }()
 
-			log.Printf("Encontrados %d vídeos. Processando...", len(videos))
-
-			for _, v := range videos {
-				isNew, err := s.dedup.IsNew(ctx, v.ID)
+				log.Printf("[%s] buscando via %s", tag, src.Name())
+				videos, err := src.Fetch(tag)
 				if err != nil {
-					log.Printf("Erro no Redis: %v", err)
+					log.Printf("[%s] erro: %v", tag, err)
+					return
 				}
-				if err == nil && !isNew {
-					continue
-				}
+				log.Printf("[%s] %d videos encontrados", tag, len(videos))
 
-				fullText := v.Description + "\n" + fmt.Sprintf("%v", v.Comments)
+				for _, v := range videos {
+					isNew, err := s.dedup.IsNew(ctx, v.ID)
+					if err != nil {
+						log.Printf("[%s] erro redis: %v", tag, err)
+					}
+					if err == nil && !isNew {
+						continue
+					}
 
-				payload := ArtifactPayload{
-					SourcePath:  v.URL,
-					TextContent: fullText,
-					SourceType:  "tiktok_rod_intercept",
-					Metadata: map[string]interface{}{
-						"comments": v.Comments,
-						"author":   v.Author,
-						"title":    v.Title,
-					},
-				}
+					var commentLines []string
+					for _, c := range v.Comments {
+						commentLines = append(commentLines, "@"+c.Nick+": "+c.Text)
+					}
+					fullText := v.Description + "\n" + strings.Join(commentLines, "\n")
 
-				data, _ := json.Marshal(payload)
+					payload := ArtifactPayload{
+						SourcePath:  v.URL,
+						TextContent: fullText,
+						SourceType:  "tiktok_rod_intercept",
+						Metadata: map[string]interface{}{
+							"comments": v.Comments,
+							"author":   v.Author,
+							"title":    v.Title,
+							"hashtag":  tag,
+						},
+					}
 
-				_, err = s.js.Publish("data.text_extracted", data)
-				if err != nil {
-					log.Printf("Erro ao publicar no NATS: %v", err)
-				} else {
-					log.Printf("Enviado: %s", v.ID)
-					if err := s.dedup.MarkAsSeen(ctx, v.ID); err != nil {
-						log.Printf("Erro ao salvar no Redis: %v", err)
+					data, _ := json.Marshal(payload)
+					_, err = s.js.Publish("data.text_extracted", data)
+					if err != nil {
+						log.Printf("[%s] erro publicar %s: %v", tag, v.ID, err)
+					} else {
+						log.Printf("[%s] publicado: %s (%d comentarios)", tag, v.ID, len(v.Comments))
+						if err := s.dedup.MarkAsSeen(ctx, v.ID); err != nil {
+							log.Printf("[%s] erro redis mark: %v", tag, err)
+						}
 					}
 				}
-			}
+			}(tag)
 		}
+
+		wg.Wait()
 	}
 }

@@ -32,7 +32,7 @@ func main() {
 	log.Println("Inicializando driver do navegador...")
 	tikTokSource := sources.NewTikTokRodSource()
 
-	svc := service.NewDiscoveryService(dedup, js, []sources.Source{tikTokSource})
+	svc := service.NewDiscoveryService(dedup, js, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
 
 	interval := time.Duration(cfg.Discovery.Interval) * time.Second
 	if interval == 0 {

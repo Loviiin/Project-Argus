@@ -8,24 +8,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config representa a estrutura completa do config.yaml
 type Config struct {
 	App struct {
 		Env string `yaml:"env"`
 	} `yaml:"app"`
 
-	// Usado pelo Discovery
 	Discovery struct {
 		Hashtags []string `yaml:"hashtags"`
 		Interval int      `yaml:"interval_seconds"`
+		Workers  int      `yaml:"workers"`
 	} `yaml:"discovery"`
 
-	// Usado pelo Parser (Legacy) ou Discovery
 	Targets struct {
 		Hashtags []string `yaml:"hashtags"`
 	} `yaml:"targets"`
 
-	// Infraestrutura Compartilhada
 	Nats struct {
 		URL string `yaml:"url"`
 	} `yaml:"nats"`
@@ -36,7 +33,6 @@ type Config struct {
 		DB       int    `yaml:"db"`
 	} `yaml:"redis"`
 
-	// Específico do Parser
 	Database struct {
 		URL string `yaml:"url"`
 	} `yaml:"database"`
@@ -53,33 +49,26 @@ type Config struct {
 }
 
 func LoadConfig() *Config {
-	// 1. Tenta pegar via Variável de Ambiente (Docker/Prod)
 	configPath := os.Getenv("CONFIG_PATH")
 
-	// 2. Se não tiver, tenta achar "subindo" pastas (Local Dev)
 	if configPath == "" {
-		// Tenta no diretório atual
 		if _, err := os.Stat("config.yaml"); err == nil {
 			configPath = "config.yaml"
 		} else if _, err := os.Stat("config/config.yaml"); err == nil {
 			configPath = "config/config.yaml"
 		} else if _, err := os.Stat("../../config/config.yaml"); err == nil {
-			// Fallback agressivo: Tenta subir até achar a raiz
-			// Útil quando rodamos 'go run' de dentro de cmd/
 			configPath = "../../config/config.yaml"
 		}
 	}
 
-	// Converte caminho relativo para absoluto para debug
 	absPath, _ := filepath.Abs(configPath)
-	log.Printf("Carregando config de: %s", absPath)
+	log.Printf("Loading config from: %s", absPath)
 
 	f, err := os.Open(configPath)
 	if err != nil {
-		// Última tentativa: hardcoded para devcontainer se falhar
 		f, err = os.Open("/workspaces/Project-Argus/config/config.yaml")
 		if err != nil {
-			log.Fatalf("Erro fatal lendo config: %v", err)
+			log.Fatalf("Fatal: could not read config: %v", err)
 		}
 	}
 	defer f.Close()
@@ -87,7 +76,7 @@ func LoadConfig() *Config {
 	var cfg Config
 	decoder := yaml.NewDecoder(f)
 	if err := decoder.Decode(&cfg); err != nil {
-		log.Fatalf("Erro ao decodificar YAML: %v", err)
+		log.Fatalf("Error decoding YAML: %v", err)
 	}
 
 	return &cfg

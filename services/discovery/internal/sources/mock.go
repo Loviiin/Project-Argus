@@ -17,7 +17,7 @@ func (m *MockSource) Fetch(query string) ([]RawVideoMetadata, error) {
 			Description: "Descrição de teste",
 			URL:         "https://www.youtube.com/shorts/IknOw-k2nB0",
 			Author:      "tester",
-			Comments:    []string{"nice", "cool"},
+			Comments:    []RawComment{{Nick: "user1", Text: "nice"}, {Nick: "user2", Text: "cool"}},
 		},
 	}, nil
 }

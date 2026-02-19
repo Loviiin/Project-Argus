@@ -31,13 +31,18 @@ func (w *TikTokWrapper) Fetch(query string) ([]RawVideoMetadata, error) {
 	// Converte os tipos do pacote tiktok para o tipo do pacote sources
 	var converted []RawVideoMetadata
 	for _, r := range results {
+		// Converte []tiktok.RawComment → []sources.RawComment
+		comments := make([]RawComment, len(r.Comments))
+		for i, c := range r.Comments {
+			comments[i] = RawComment{Nick: c.Nick, Text: c.Text}
+		}
 		converted = append(converted, RawVideoMetadata{
 			ID:          r.ID,
 			Title:       r.Title,
 			Description: r.Description,
 			URL:         r.URL,
 			Author:      r.Author,
-			Comments:    r.Comments,
+			Comments:    comments,
 		})
 	}
 
