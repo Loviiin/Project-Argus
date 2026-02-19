@@ -25,6 +25,55 @@ func min(a, b int) int {
 	return b
 }
 
+// debugElements lista elementos visíveis da página para debug
+func debugElements(page *rod.Page) {
+	elements, err := page.Elements("*")
+	if err != nil {
+		fmt.Printf("⚠️  [Debug] Erro listando elementos: %v\n", err)
+		return
+	}
+
+	fmt.Printf("🐛 [Debug] Total de elementos: %d\n", len(elements))
+
+	// Lista elementos relevantes para captcha
+	for i, el := range elements {
+		class, _ := el.Attribute("class")
+		id, _ := el.Attribute("id")
+		alt, _ := el.Attribute("alt")
+		tag, _ := el.Evaluate(&rod.EvalOptions{JS: `() => this.tagName`})
+
+		tagName := ""
+		if tag != nil {
+			tagName = tag.Value.String()
+		}
+
+		classStr := ""
+		if class != nil {
+			classStr = *class
+		}
+
+		idStr := ""
+		if id != nil {
+			idStr = *id
+		}
+
+		altStr := ""
+		if alt != nil {
+			altStr = *alt
+		}
+
+		// Filtra para mostrar apenas elementos relevantes
+		if strings.Contains(strings.ToLower(classStr), "captcha") ||
+			strings.Contains(strings.ToLower(classStr), "slide") ||
+			strings.Contains(strings.ToLower(classStr), "verify") ||
+			strings.Contains(strings.ToLower(classStr), "secsdk") ||
+			strings.Contains(strings.ToLower(idStr), "captcha") ||
+			tagName == "IMG" || tagName == "CANVAS" || tagName == "BUTTON" {
+			fmt.Printf("  [%d] <%s> class='%s' id='%s' alt='%s'\n", i, tagName, classStr, idStr, altStr)
+		}
+	}
+}
+
 // detectCaptchaType identifica qual tipo de captcha está presente na página
 // Por padrão, assume ROTATE já que é o mais comum no TikTok atualmente
 func detectCaptchaType(page *rod.Page) CaptchaType {
@@ -48,130 +97,109 @@ func handleRotateCaptcha(page *rod.Page) error {
 	const maxRetries = 5
 	const retryDelay = 2 * time.Second
 
+	var lastOuterB64, lastInnerB64 string
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
 			fmt.Printf("🔄 [Captcha] Tentativa %d/%d...\n", attempt, maxRetries)
 			time.Sleep(retryDelay)
 		}
 
-		// 1. Extrai as imagens (Externa e Interna)
 		outerB64, innerB64, err := extractRotateImages(page)
 		if err != nil {
 			fmt.Printf("⚠️  [Captcha] Erro extraindo imagens (tentativa %d): %v\n", attempt, err)
 			continue
 		}
+		lastOuterB64, lastInnerB64 = outerB64, innerB64
 
-		fmt.Println("📸 [Captcha] Imagens extraídas com sucesso")
-
-		// 2. Tenta resolver usando Vision Service (GRATUITO)
 		var angle float64
 		angle, err = solvePuzzleWithVisionService(outerB64, innerB64)
-
 		if err != nil {
 			fmt.Printf("⚠️  [Captcha] Vision Service falhou: %v\n", err)
-			fmt.Println("🔄 [Captcha] Tentando SadCaptcha como fallback...")
-
-			// Fallback: tenta SadCaptcha (PAGO)
 			angle, err = solveRotateWithSadCaptcha(outerB64, innerB64)
 			if err != nil {
 				fmt.Printf("⚠️  [Captcha] Ambos os métodos falharam (tentativa %d)\n", attempt)
 				continue
 			}
-			fmt.Println("✅ [Captcha] Resolvido com SadCaptcha (fallback)")
+			fmt.Println("✅ [Captcha] Resolvido com SadCaptcha")
 		} else {
-			fmt.Println("✅ [Captcha] Resolvido com Vision Service (gratuito)")
+			fmt.Println("✅ [Captcha] Resolvido com Vision Service")
 		}
 
-		fmt.Printf("✅ [Captcha] Solução recebida: Ângulo %.2f°\n", angle)
-
-		// Ignora se o ângulo for 0 (detecção inválida)
 		if angle == 0 {
-			fmt.Printf("⚠️  [Captcha] Ângulo é 0 - ignorando (tentativa %d)\n", attempt)
+			fmt.Printf("⚠️  [Captcha] Ângulo 0 - ignorando (tentativa %d)\n", attempt)
 			continue
 		}
 
-		// 3. Localiza o slider icon primeiro
-		fmt.Println("🔍 [Captcha] Procurando .secsdk-captcha-drag-icon...")
 		slider, err := findSlider(page)
 		if err != nil {
-			fmt.Printf("⚠️  [Captcha] .secsdk-captcha-drag-icon não encontrado (tentativa %d): %v\n", attempt, err)
+			fmt.Printf("⚠️  [Captcha] Slider não encontrado (tentativa %d): %v\n", attempt, err)
 			continue
 		}
-		fmt.Println("✅ [Captcha] Drag icon encontrado")
 
-		// 4. Busca o container da barra (cap-w-full que contém o slider)
-		fmt.Println("🔍 [Captcha] Procurando container da barra...")
+		var l_s, l_i float64
 
-		// Sobe na hierarquia até encontrar o container com cap-w-full
-		var sliderBar *rod.Element
-		current := slider
-		for i := 0; i < 5; i++ { // Máximo 5 níveis
-			parent, err := current.Parent()
-			if err != nil {
-				break
+		slidebarWidth, err := page.Eval(`() => {
+			const selectors = [
+				'.captcha_verify_slide--slidebar',
+				'[class*="captcha_verify_slide--slidebar"]',
+				'[class*="cap-w-full"][class*="cap-relative"]'
+			];
+			for (const sel of selectors) {
+				const el = document.querySelector(sel);
+				if (el) {
+					const rect = el.getBoundingClientRect();
+					if (rect.width > 100) return rect.width;
+				}
 			}
-
-			class, _ := parent.Attribute("class")
-			if class != nil && strings.Contains(*class, "cap-w-full") {
-				sliderBar = parent
-				fmt.Printf("✅ [Captcha] Container encontrado (nível %d): class='%s'\n", i+1, *class)
-				break
+			const icon = document.querySelector('.secsdk-captcha-drag-icon');
+			if (icon) {
+				let parent = icon.parentElement;
+				for (let i = 0; i < 5 && parent; i++) {
+					const rect = parent.getBoundingClientRect();
+					if (rect.width > 200) return rect.width;
+					parent = parent.parentElement;
+				}
 			}
-			current = parent
+			return 0;
+		}`)
+		if err != nil || slidebarWidth.Value.Num() == 0 {
+			l_s = 340.0
+		} else {
+			l_s = slidebarWidth.Value.Num()
 		}
 
-		if sliderBar == nil {
-			fmt.Printf("⚠️  [Captcha] Container cap-w-full não encontrado (tentativa %d)\n", attempt)
-			continue
+		iconWidth, err := page.Eval(`() => {
+			const icon = document.querySelector('.secsdk-captcha-drag-icon');
+			if (icon) {
+				const rect = icon.getBoundingClientRect();
+				return rect.width;
+			}
+			return 0;
+		}`)
+		if err != nil || iconWidth.Value.Num() == 0 {
+			l_i = 64.0
+		} else {
+			l_i = iconWidth.Value.Num()
 		}
 
-		// Obtém as dimensões
-		fmt.Println("📐 [Captcha] Obtendo dimensões...")
-		barShape, err := sliderBar.Shape()
-		if err != nil || len(barShape.Quads) == 0 {
-			fmt.Printf("⚠️  [Captcha] Erro obtendo dimensões da barra (tentativa %d)\n", attempt)
-			continue
-		}
-
-		iconShape, err := slider.Shape()
-		if err != nil || len(iconShape.Quads) == 0 {
-			fmt.Printf("⚠️  [Captcha] Erro obtendo dimensões do ícone (tentativa %d)\n", attempt)
-			continue
-		}
-
-		// Calcula larguras
-		l_s := barShape.Quads[0][2] - barShape.Quads[0][0]   // largura da barra
-		l_i := iconShape.Quads[0][2] - iconShape.Quads[0][0] // largura do ícone
-
-		// TESTE SIMPLIFICADO: usa ângulo como proporção direta
-		// Se ângulo = 180°, move metade da barra
-		// Se ângulo = 360°, move a barra toda
 		maxDistance := l_s - l_i
 		pixelsToMove := (maxDistance * angle) / 360.0
 
-		fmt.Printf("📏 [Captcha] TESTE: Barra=%.0fpx, Ícone=%.0fpx, Distância máxima=%.0fpx\n",
-			l_s, l_i, maxDistance)
-		fmt.Printf("📏 [Captcha] Ângulo=%.0f° → Movendo %.2f pixels (%.1f%% da distância máxima)\n",
-			angle, pixelsToMove, (pixelsToMove/maxDistance)*100)
-
-		// Ignora se os pixels calculados são 0 ou inválidos
 		if pixelsToMove <= 0 {
 			fmt.Printf("⚠️  [Captcha] Distância calculada inválida: %.2f (tentativa %d)\n", pixelsToMove, attempt)
 			continue
 		}
 
-		// 4. Executa o movimento do slider
+		fmt.Printf("🎯 [Captcha] Arrastando slider: ângulo=%.2f°, distância=%.2fpx\n", angle, pixelsToMove)
+
 		if err := DragSlider(page, slider, pixelsToMove); err != nil {
 			fmt.Printf("⚠️  [Captcha] Erro arrastando slider (tentativa %d): %v\n", attempt, err)
 			continue
 		}
 
-		fmt.Println("✅ [Captcha] Slider arrastado com sucesso")
-
-		// 5. Aguarda um pouco para a validação
 		time.Sleep(1 * time.Second)
 
-		// 6. Verifica se o captcha foi resolvido
 		if !isCaptchaPresent(page) {
 			fmt.Println("🎉 [Captcha] ROTAÇÃO resolvida com sucesso!")
 			return nil
@@ -180,7 +208,14 @@ func handleRotateCaptcha(page *rod.Page) error {
 		fmt.Printf("⚠️  [Captcha] Ainda presente após rotação (tentativa %d)\n", attempt)
 	}
 
-	return fmt.Errorf("falha ao resolver captcha de ROTAÇÃO após %d tentativas", maxRetries)
+	fmt.Println("⚠️  [Captcha] Tentativas automáticas esgotadas para ROTAÇÃO.")
+	if lastOuterB64 != "" {
+		SaveCaptchaSample("rotate", map[string]string{
+			"outer": lastOuterB64,
+			"inner": lastInnerB64,
+		}, true)
+	}
+	return waitCaptchaResolution(page, 5*time.Minute)
 }
 
 // handlePuzzleCaptcha resolve captcha do tipo Puzzle usando SadCaptcha
@@ -190,76 +225,71 @@ func handlePuzzleCaptcha(page *rod.Page) error {
 	const maxRetries = 5
 	const retryDelay = 2 * time.Second
 
+	var lastBgB64, lastPieceB64 string
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
 			fmt.Printf("🔄 [Captcha] Tentativa %d/%d...\n", attempt, maxRetries)
 			time.Sleep(retryDelay)
 		}
 
-		// 1. Extrai as imagens (Background e Peça)
 		bgB64, pieceB64, err := extractPuzzleImages(page)
 		if err != nil {
 			fmt.Printf("⚠️  [Captcha] Erro extraindo imagens (tentativa %d): %v\n", attempt, err)
 			continue
 		}
+		lastBgB64, lastPieceB64 = bgB64, pieceB64
 
-		fmt.Println("📸 [Captcha] Imagens extraídas com sucesso")
-
-		// 2. Tenta resolver usando Vision Service (GRATUITO) primeiro
 		var distance float64
 		distance, err = solvePuzzleWithVisionService(bgB64, pieceB64)
-
 		if err != nil {
 			fmt.Printf("⚠️  [Captcha] Vision Service falhou: %v\n", err)
-			fmt.Println("🔄 [Captcha] Tentando SadCaptcha como fallback...")
-
-			// Fallback: tenta SadCaptcha (PAGO)
 			distance, err = solvePuzzleWithSadCaptcha(bgB64, pieceB64)
 			if err != nil {
 				fmt.Printf("⚠️  [Captcha] Ambos os métodos falharam (tentativa %d)\n", attempt)
 				continue
 			}
-			fmt.Println("✅ [Captcha] Resolvido com SadCaptcha (fallback)")
+			fmt.Println("✅ [Captcha] Resolvido com SadCaptcha")
 		} else {
-			fmt.Println("✅ [Captcha] Resolvido com Vision Service (gratuito)")
+			fmt.Println("✅ [Captcha] Resolvido com Vision Service")
 		}
 
-		fmt.Printf("✅ [Captcha] Solução recebida: Distância %.2f pixels\n", distance)
-
-		// Ignora se o offset for 0 (detecção inválida)
 		if distance == 0 {
-			fmt.Printf("⚠️  [Captcha] Offset é 0 - ignorando (tentativa %d)\n", attempt)
+			fmt.Printf("⚠️  [Captcha] Offset 0 - ignorando (tentativa %d)\n", attempt)
 			continue
 		}
 
-		// 3. Localiza o slider
 		slider, err := findSlider(page)
 		if err != nil {
 			fmt.Printf("⚠️  [Captcha] Erro localizando slider (tentativa %d): %v\n", attempt, err)
 			continue
 		}
 
-		// 4. Executa o movimento
+		fmt.Printf("🎯 [Captcha] Arrastando slider: distância=%.2fpx\n", distance)
+
 		if err := DragSlider(page, slider, distance); err != nil {
 			fmt.Printf("⚠️  [Captcha] Erro arrastando slider (tentativa %d): %v\n", attempt, err)
 			continue
 		}
 
-		fmt.Println("✅ [Captcha] Slider arrastado com sucesso")
-
-		// Aguarda para ver se o captcha foi resolvido
 		time.Sleep(2 * time.Second)
 
-		// Verifica se ainda há captcha (se não houver, sucesso!)
 		if !isCaptchaPresent(page) {
-			fmt.Printf("🎉 [Captcha] Resolvido com sucesso na tentativa %d!\n", attempt)
+			fmt.Printf("🎉 [Captcha] PUZZLE resolvido na tentativa %d!\n", attempt)
 			return nil
 		}
 
-		fmt.Printf("⚠️  [Captcha] Ainda presente após tentativa %d, tentando novamente...\n", attempt)
+		fmt.Printf("⚠️  [Captcha] Ainda presente após tentativa %d\n", attempt)
 	}
 
-	return fmt.Errorf("falha ao resolver captcha após %d tentativas", maxRetries)
+	fmt.Println("⚠️  [Captcha] Tentativas automáticas esgotadas para PUZZLE.")
+	if lastBgB64 != "" {
+		SaveCaptchaSample("slider", map[string]string{
+			"background": lastBgB64,
+			"piece":      lastPieceB64,
+		}, true)
+	}
+	return waitCaptchaResolution(page, 5*time.Minute)
 }
 
 // extractRotateImages extrai as imagens do captcha de rotação em Base64
@@ -797,125 +827,106 @@ func extractCaptchaImages(page *rod.Page) (*CaptchaImages, error) {
 }
 
 // findSlider localiza o elemento do slider que deve ser arrastado
+// Usa o seletor padrão .secsdk-captcha-drag-icon conforme documentação SadCaptcha
 func findSlider(page *rod.Page) (*rod.Element, error) {
-	// Seletores específicos do TikTok (baseado no debug)
+	// Seletores ordenados por prioridade (documentação primeiro)
 	sliderSelectors := []string{
-		// TikTok específico
-		`button[class*="secsdk-captcha-drag-icon"]`,
+		// Seletor primário (documentação SadCaptcha)
+		".secsdk-captcha-drag-icon",
 		`[class*="secsdk-captcha-drag-icon"]`,
-		`button[class*="TUXButton"][class*="drag"]`,
-		// Genéricos
-		`div[class*="slide"][class*="btn"]`,
-		`div[class*="slider"][class*="button"]`,
-		`.captcha_verify_slide > div`,
-		`div[id*="slide"][id*="block"]`,
-		`span[class*="slide"][class*="move"]`,
+		`button[class*="secsdk-captcha-drag-icon"]`,
+
+		// Seletores alternativos TikTok
+		`[class*="captcha-drag-icon"]`,
 		`div[class*="secsdk-captcha-drag"]`,
-		// Fallback: qualquer botão dentro do container de captcha
+		`[class*="captcha_verify"] [class*="drag"]`,
+		`div[class*="slider"][class*="button"]`,
+		`[class*="verify-bar"] [class*="verify-slide"]`,
+
+		// Seletores para nova UI TikTok (cap- prefix)
+		`[class*="cap-absolute"][class*="cap-cursor"]`,
+		`div[class*="cap-w-6"][class*="cap-h-6"]`,
+		`svg[class*="cap-absolute"]`,
+
+		// Fallback genérico
+		`button[class*="TUXButton"][class*="drag"]`,
 		`.captcha-verify-container button`,
 		`[class*="captcha-verify"] button`,
 	}
 
-	fmt.Println("🔍 [Captcha] Procurando elemento slider...")
+	fmt.Println("🔍 [Captcha] Procurando elemento slider (.secsdk-captcha-drag-icon)...")
 
 	for _, selector := range sliderSelectors {
-		if el, err := page.Timeout(2 * time.Second).Element(selector); err == nil {
-			// Verifica se o elemento está visível
+		elements, err := page.Timeout(500 * time.Millisecond).Elements(selector)
+		if err != nil || len(elements) == 0 {
+			continue
+		}
+
+		// Testa cada elemento encontrado
+		for _, el := range elements {
+			// Verifica se o elemento é visível
 			visible, _ := el.Visible()
-			if visible {
-				fmt.Printf("✅ [Captcha] Slider encontrado: %s\n", selector)
+			if !visible {
+				continue
+			}
+
+			// Verifica dimensões
+			box, err := el.Shape()
+			if err != nil || len(box.Quads) == 0 {
+				continue
+			}
+
+			quad := box.Quads[0]
+			width := quad[2] - quad[0]
+			height := quad[5] - quad[1]
+
+			// Slider icon geralmente tem 20-50px
+			if width >= 15 && height >= 15 && width <= 80 && height <= 80 {
+				fmt.Printf("✅ [Captcha] Slider encontrado via: %s (%.0fx%.0f)\n", selector, width, height)
 				return el, nil
-			} else {
-				fmt.Printf("⚠️  [Captcha] Slider encontrado mas invisível: %s\n", selector)
+			} else if width > 10 && height > 10 {
+				fmt.Printf("⚠️  [Captcha] Elemento com tamanho atípico via %s: %.0fx%.0f (tentando)\n", selector, width, height)
+				return el, nil
 			}
 		}
 	}
 
-	// DEBUG: Lista todos os botões na página
-	fmt.Println("🐛 [Debug] Listando todos os botões...")
-	buttons, _ := page.Elements("button")
-	for i, btn := range buttons {
-		if i >= 5 {
-			break
-		}
-		class, _ := btn.Attribute("class")
-		classStr := ""
-		if class != nil {
-			classStr = *class
-		}
-		fmt.Printf("  Button[%d]: class='%s'\n", i+1, classStr)
-	}
-
-	return nil, fmt.Errorf("slider não encontrado na página")
-}
-
-// debugElements lista os elementos do DOM para debug
-func debugElements(page *rod.Page) {
-	// Lista divs com classe contendo 'captcha' ou 'verify'
-	captchaDivs := []string{"[class*='captcha']", "[class*='verify']", "[class*='secsdk']"}
-
-	for _, selector := range captchaDivs {
-		elements, _ := page.Elements(selector)
+	// DEBUG: Lista todos os elementos com 'captcha' ou 'slide' na classe
+	fmt.Println("🐛 [Debug] Listando elementos relacionados a captcha...")
+	debugSelectors := []string{"[class*='captcha']", "[class*='slide']", "[class*='secsdk']"}
+	for _, sel := range debugSelectors {
+		elements, _ := page.Elements(sel)
 		if len(elements) > 0 {
-			fmt.Printf("🔍 Encontrados %d elementos com selector '%s'\n", len(elements), selector)
-		}
-		for i, el := range elements {
-			if i >= 5 {
-				break // Limita para não poluir
-			}
-			class, _ := el.Attribute("class")
-			classStr := ""
-			if class != nil {
-				classStr = *class
-			}
-			fmt.Printf("  [%d] class='%s'\n", i+1, classStr)
+			fmt.Printf("  Encontrados %d elementos com '%s'\n", len(elements), sel)
 		}
 	}
 
-	// Lista todas as imagens
-	images, _ := page.Elements("img")
-	fmt.Printf("🖼️  Total de imagens na página: %d\n", len(images))
-	for i, img := range images {
-		if i >= 5 {
-			fmt.Printf("   ... e mais %d imagens\n", len(images)-5)
-			break
-		}
-		src, _ := img.Attribute("src")
-		alt, _ := img.Attribute("alt")
-		class, _ := img.Attribute("class")
-
-		srcStr, altStr, classStr := "", "", ""
-		if src != nil {
-			srcStr = *src
-			if len(srcStr) > 80 {
-				srcStr = srcStr[:80] + "..."
-			}
-		}
-		if alt != nil {
-			altStr = *alt
-		}
-		if class != nil {
-			classStr = *class
-		}
-
-		fmt.Printf("  IMG[%d]: class='%s' alt='%s' src='%s'\n", i+1, classStr, altStr, srcStr)
-	}
+	return nil, fmt.Errorf("slider não encontrado na página (testados %d seletores)", len(sliderSelectors))
 }
 
 // waitCaptchaResolution aguarda até que o CAPTCHA seja resolvido manualmente
-// ou até que o tempo limite seja atingido
+// ou até que o tempo limite seja atingido.
+// O browser permanece aberto — resolva o captcha e a automação continuará automaticamente.
 func waitCaptchaResolution(page *rod.Page, maxWait time.Duration) error {
 	deadline := time.Now().Add(maxWait)
-	fmt.Printf("[Captcha] Aguardando resolução manual. Acesse http://localhost:9222\n")
-	fmt.Printf("[Captcha] Tempo limite: %s\n", maxWait)
+
+	fmt.Println("════════════════════════════════════════════")
+	fmt.Println("🛑  CAPTCHA DETECTADO — INTERVENÇÃO MANUAL  ")
+	fmt.Println("════════════════════════════════════════════")
+	fmt.Printf("⏳ Você tem %s para resolver o captcha.\n", maxWait)
+	fmt.Println("   Resolva o captcha no browser aberto e aguarde.")
+	fmt.Println("════════════════════════════════════════════")
 
 	for time.Now().Before(deadline) {
 		if !isCaptchaPresent(page) {
-			fmt.Println("[Captcha] Resolvido manualmente!")
+			fmt.Println("✅ [Captcha] Resolvido manualmente! Continuando automação...")
 			return nil
 		}
+		remaining := time.Until(deadline).Round(time.Second)
+		fmt.Printf("⏳ [Captcha Manual] Aguardando resolução... (%s restantes)\n", remaining)
 		time.Sleep(2 * time.Second)
 	}
 
+	fmt.Println("❌ [Captcha] Tempo limite esgotado para resolução manual.")
 	return ErrCaptchaTimeout
 }

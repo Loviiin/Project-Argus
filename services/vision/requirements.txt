@@ -5,6 +5,8 @@ nats-py
 numpy
 opencv-python-headless
 Pillow
+scikit-image
 
 # IA / OCR
 easyocr
+

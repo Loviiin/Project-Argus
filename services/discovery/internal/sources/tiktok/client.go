@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -31,13 +30,12 @@ func NewSource() *Source {
 
 	l := launcher.New().
 		Bin(path).
-		Headless(true).
+		Headless(false).
 		Devtools(true)
 
 	u := l.MustLaunch()
 	browser := rod.New().ControlURL(u).MustConnect()
 
-	fmt.Println("Monitor do Go-Rod rodando em: http://localhost:9222")
 	go browser.ServeMonitor(":9222")
 
 	return &Source{
@@ -219,93 +217,36 @@ func (s *Source) processVideo(urlStr string) (RawVideoMetadata, error) {
 
 // handleCaptcha orquestra o processo de resolução do captcha
 func (s *Source) handleCaptcha(page *rod.Page) error {
-	fmt.Println("🔍 [Captcha] Iniciando resolução de captcha...")
-
-	// Log da URL atual para debug
 	info, _ := page.Info()
 	if info != nil {
 		fmt.Printf("🌐 [Captcha] URL atual: %s\n", info.URL)
 	}
 
-	// Tira screenshot para debug (salva em /tmp)
-	screenshot, _ := page.Screenshot(true, nil)
-	if screenshot != nil {
-		timestamp := time.Now().Format("20060102_150405")
-		filename := fmt.Sprintf("/tmp/captcha_debug_%s.png", timestamp)
-		if err := os.WriteFile(filename, screenshot, 0644); err == nil {
-			fmt.Printf("📸 [Captcha] Screenshot salvo: %s\n", filename)
-		}
-	}
-
-	// 1. Detecta o tipo de captcha
 	captchaType := detectCaptchaType(page)
 	fmt.Printf("🎯 [Captcha] Tipo detectado: %s\n", captchaType)
 
 	var err error
 	switch captchaType {
 	case CaptchaTypeRotate:
-		// Resolve captcha de rotação usando SadCaptcha
-		fmt.Println(" [Captcha] Iniciando resolução ROTATE...")
 		err = handleRotateCaptcha(page)
 	case CaptchaTypePuzzle:
-		// Resolve captcha de puzzle usando Vision/SadCaptcha
-		fmt.Println("🧩 [Captcha] Iniciando resolução PUZZLE...")
 		err = handlePuzzleCaptcha(page)
 	default:
-		fmt.Println("  [Captcha] Tipo DESCONHECIDO. Tentando método genérico...")
-		// Fallback: tenta o método antigo
-		err = s.handleCaptchaFallback(page)
+		fmt.Println("⚠️  [Captcha] Tipo desconhecido. Aguardando resolução manual...")
+		err = waitCaptchaResolution(page, 5*time.Minute)
 	}
 
 	if err != nil {
 		return fmt.Errorf("erro resolvendo captcha: %w", err)
 	}
 
-	// Aguarda validação e reload da página
-	fmt.Println("⏳ [Captcha] Aguardando validação e recarregamento...")
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 
-	// Verifica se o captcha foi resolvido
 	if isCaptchaPresent(page) {
 		return ErrCaptcha
 	}
 
-	fmt.Println(" [Captcha] Captcha resolvido com sucesso!")
-	return nil
-}
-
-// handleCaptchaFallback método antigo para fallback
-func (s *Source) handleCaptchaFallback(page *rod.Page) error {
-	fmt.Println("[Captcha] Usando método fallback...")
-
-	// Detecta e extrai as imagens do captcha
-	images, err := extractCaptchaImages(page)
-	if err != nil {
-		return fmt.Errorf("erro extraindo imagens do captcha: %w", err)
-	}
-
-	fmt.Printf("[Captcha] Imagens extraídas: Background=%s, Piece=%s\n",
-		images.BackgroundURL, images.PieceURL)
-
-	// MOCK: Simulamos uma distância fixa
-	mockSolution := CaptchaSolution{
-		DistanceX: 150.0,
-		Success:   true,
-	}
-
-	fmt.Printf("[Captcha] Solução MOCK: distância = %.2f pixels\n", mockSolution.DistanceX)
-
-	// Localiza o elemento do slider
-	slider, err := findSlider(page)
-	if err != nil {
-		return fmt.Errorf("erro localizando slider: %w", err)
-	}
-
-	// Executa o movimento humanizado do mouse
-	if err := DragSlider(page, slider, mockSolution.DistanceX); err != nil {
-		return fmt.Errorf("erro arrastando slider: %w", err)
-	}
-
+	fmt.Println("✅ [Captcha] Captcha resolvido com sucesso!")
 	return nil
 }
 

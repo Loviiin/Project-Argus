@@ -7,11 +7,14 @@ import io
 import json
 import logging
 import os
+import asyncio
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+import time
 from nats.aio.client import Client as NATS
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,10 +35,6 @@ class CaptchaSolver:
         try:
             self.nc = NATS()
             await self.nc.connect(self.nats_url)
-            logger.info(f"✅ Conectado ao NATS: {self.nats_url}")
-            logger.info("✅ Usando Request-Reply simples (sem JetStream)")
-            return True
-            
             logger.info(f"✅ Conectado ao NATS: {self.nats_url}")
             logger.info("✅ Usando Request-Reply simples (sem JetStream)")
             return True
@@ -85,12 +84,7 @@ class CaptchaSolver:
             logger.error(f"❌ Erro decodificando imagem: {e}")
             return None
     
-    def sharpen_image(self, image: np.ndarray) -> np.ndarray:
-        """Aplica sharpening para melhorar detalhes"""
-        kernel = np.array([[-1,-1,-1],
-                          [-1, 9,-1],
-                          [-1,-1,-1]])
-        return cv2.filter2D(image, -1, kernel)
+
     
     def find_piece_position(
         self, 
@@ -311,302 +305,277 @@ class CaptchaSolver:
             logger.error(f"❌ Erro no Multi-scale Matching: {e}")
             return None
     
-    def solve_rotation(self, outer_b64: str, inner_b64: str) -> dict:
+    def calculate_edge_score(self, outer: np.ndarray, inner: np.ndarray, mask: np.ndarray) -> float:
         """
-        Resolve um captcha de rotação usando força bruta
-        
-        O captcha do TikTok mostra uma foto dividida em dois círculos:
-        - Outer: círculo externo que gira no sentido ANTI-HORÁRIO
-        - Inner: círculo interno que gira no sentido HORÁRIO
-        
-        Quando o slider move, ambos giram em direções opostas.
-        Precisamos encontrar o ângulo do slider onde as imagens se alinham.
+        Calcula score baseado em detecção de bordas Canny
         
         Args:
-            outer_b64: Imagem do círculo externo em Base64
-            inner_b64: Imagem do círculo interno em Base64
+            outer: Imagem outer em grayscale
+            inner: Imagem inner em grayscale
+            mask: Máscara circular
             
         Returns:
-            Dict com resultado: {'angle': int, 'success': bool, 'confidence': float}
+            Score de 0-200 baseado na correlação das bordas
+        """
+        # Detecta bordas com Canny
+        outer_edges = cv2.Canny(outer, 50, 150)
+        inner_edges = cv2.Canny(inner, 50, 150)
+        
+        # Aplica máscara
+        outer_masked = cv2.bitwise_and(outer_edges, outer_edges, mask=mask)
+        inner_masked = cv2.bitwise_and(inner_edges, inner_edges, mask=mask)
+        
+        # Calcula correlação apenas nos pixels da máscara
+        mask_pixels = mask > 0
+        if np.sum(mask_pixels) == 0:
+            return 100.0
+        
+        outer_vals = outer_masked[mask_pixels].astype(np.float64)
+        inner_vals = inner_masked[mask_pixels].astype(np.float64)
+        
+        # Evita divisão por zero
+        if np.std(outer_vals) < 1e-6 or np.std(inner_vals) < 1e-6:
+            return 100.0
+        
+        # Correlação de Pearson
+        correlation = np.corrcoef(outer_vals, inner_vals)[0, 1]
+        if np.isnan(correlation):
+            return 100.0
+        
+        # Normaliza para 0-200
+        return (correlation + 1.0) * 100.0
+    
+    def calculate_color_score(self, outer: np.ndarray, inner: np.ndarray, mask: np.ndarray) -> float:
+        """
+        Calcula score baseado em histograma de cores RGB
+        
+        Args:
+            outer: Imagem outer em BGR
+            inner: Imagem inner em BGR
+            mask: Máscara circular
+            
+        Returns:
+            Score de 0-200 baseado na similaridade de cores
+        """
+        # Calcula histogramas RGB (8 bins por canal = 512 bins total)
+        hist_outer = cv2.calcHist([outer], [0, 1, 2], mask, [8, 8, 8], 
+                                   [0, 256, 0, 256, 0, 256])
+        hist_inner = cv2.calcHist([inner], [0, 1, 2], mask, [8, 8, 8], 
+                                   [0, 256, 0, 256, 0, 256])
+        
+        # Normaliza
+        cv2.normalize(hist_outer, hist_outer, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        cv2.normalize(hist_inner, hist_inner, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        
+        # Compara usando correlação (melhor que Bhattacharyya para este caso)
+        similarity = cv2.compareHist(hist_outer, hist_inner, cv2.HISTCMP_CORREL)
+        
+        # Normaliza para 0-200 (correlação vai de -1 a 1)
+        return (similarity + 1.0) * 100.0
+    
+    
+    async def solve_rotation(self, outer_b64: str, inner_b64: str) -> dict:
+        """
+        Resolve captcha de rotação usando Transformada Polar e Correlação de Borda.
+        Foca na continuidade dos pixels entre o anel interno e externo.
+        Executa em thread separada para não bloquear o loop.
+        """
+        # Executa processamento pesado em thread separada
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._solve_rotation_polar_sync, outer_b64, inner_b64
+        )
+
+    def _solve_rotation_polar_sync(self, outer_b64: str, inner_b64: str) -> dict:
+        """
+        Versão síncrona da resolução polar (para rodar no executor).
         """
         try:
-            logger.info("🔄 Resolvendo captcha de rotação...")
-            logger.info("   Outer gira anti-horário, Inner gira horário")
+            logger.info("🔄 Resolvendo captcha de rotação (Polar + Disc Interior Match)...")
             
-            # Decodifica imagens
+            # 1. Decodifica
             outer = self.decode_image(outer_b64)
             inner = self.decode_image(inner_b64)
             
             if outer is None or inner is None:
-                return {
-                    'angle': 0,
-                    'success': False,
-                    'confidence': 0.0,
-                    'error': 'Falha ao decodificar imagens'
-                }
+                return {'success': False, 'error': 'Image decode failed', 'angle': 0}
+
+            # 2. Gray + CLAHE
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            outer_gray = clahe.apply(cv2.cvtColor(outer, cv2.COLOR_BGR2GRAY))
+            inner_gray = clahe.apply(cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY))
+
+            # 3. Transformada Polar (centros independentes)
+            h_out, w_out = outer_gray.shape
+            h_in, w_in = inner_gray.shape
             
-            logger.info(f"   Outer: {outer.shape}, Inner: {inner.shape}")
+            max_radius = w_out / 2
+            polar_w = int(w_out * 2)
+            polar_h = int(max_radius)
+            flags = cv2.WARP_POLAR_LINEAR + cv2.WARP_FILL_OUTLIERS
             
-            # NÃO converte para grayscale - mantém cores para melhor matching
-            # Captchas do TikTok usam imagens coloridas onde cor é importante
-            h_outer, w_outer = outer.shape[:2]
-            h_inner, w_inner = inner.shape[:2]
+            center_out = (w_out / 2, h_out / 2)
+            center_in = (w_in / 2, h_in / 2)
             
-            # Centro das imagens
-            center_outer = (w_outer // 2, h_outer // 2)
-            center_inner = (w_inner // 2, h_inner // 2)
+            polar_outer = cv2.warpPolar(outer_gray, (polar_w, polar_h), center_out, max_radius, flags)
+            polar_inner = cv2.warpPolar(inner_gray, (polar_w, polar_h), center_in, max_radius, flags)
             
-            # Cria máscara circular para o inner (ignora cantos transparentes)
-            inner_mask = np.zeros((h_inner, w_inner), dtype=np.uint8)
-            radius_inner = min(w_inner, h_inner) // 2 - 5
-            cv2.circle(inner_mask, center_inner, radius_inner, 255, -1)
+            boundary_r = int(w_in / 2)
             
-            # Cria máscara de anel para comparação na borda do inner
-            # Compara apenas a região próxima à borda onde inner e outer se encontram
-            ring_mask = np.zeros((h_inner, w_inner), dtype=np.uint8)
-            cv2.circle(ring_mask, center_inner, radius_inner, 255, -1)
-            cv2.circle(ring_mask, center_inner, radius_inner - 40, 0, -1)  # Remove mais do centro para focar na borda
+            # Diagnóstico
+            logger.info(f"   📊 Outer centro={np.mean(polar_outer[:boundary_r, :]):.1f}, anel={np.mean(polar_outer[boundary_r:, :]):.1f}")
+            logger.info(f"   📊 Inner disco={np.mean(polar_inner[:boundary_r, :]):.1f}, boundary_r={boundary_r}px")
             
-            # Força bruta: testa de 0 a 360 graus
-            # O ângulo de solução vai de 0 a 360 conforme documentação
-            best_angle = 0
-            best_score = -float('inf')
-            step = 2  # Testa a cada 2 graus para mais precisão
+            # 4. Máscara circular para o inner (ignora cantos transparentes→preto)
+            # Na imagem polar, os cantos do quadrado ficam em raios > boundary_r
+            # e em ângulos diagonais. Criamos máscara baseada em threshold.
+            inner_mask = (polar_inner[:boundary_r, :] > 5).astype(np.uint8) * 255
             
-            scores = []
+            # 5. Comparar INTERIOR DO DISCO (ambos têm conteúdo aqui!)
+            # Evita centro (< 15px = artefato polar) e borda (>= boundary_r)
+            disc_start = 15
+            disc_end = boundary_r - 5
             
-            logger.info(f"🔍 Testando rotações de 0° a 360° (step={step}°)...")
+            inner_disc = polar_inner[disc_start:disc_end, :]
+            outer_disc = polar_outer[disc_start:disc_end, :]
+            disc_mask = inner_mask[disc_start:disc_end, :]
             
-            # DEBUG: Salva as imagens originais
+            # Debug: salva tudo
             debug_dir = "/tmp/captcha_debug"
             os.makedirs(debug_dir, exist_ok=True)
-            cv2.imwrite(f"{debug_dir}/outer_original.png", outer)
-            cv2.imwrite(f"{debug_dir}/inner_original.png", inner)
-            cv2.imwrite(f"{debug_dir}/ring_mask.png", ring_mask)
-            logger.info(f"💾 [Debug] Imagens salvas em {debug_dir}")
+            ts = int(time.time() * 1000)
+            cv2.imwrite(f"{debug_dir}/{ts}_outer_raw.png", outer)
+            cv2.imwrite(f"{debug_dir}/{ts}_inner_raw.png", inner)
+            cv2.imwrite(f"{debug_dir}/{ts}_polar_outer.png", polar_outer)
+            cv2.imwrite(f"{debug_dir}/{ts}_polar_inner.png", polar_inner)
+            cv2.imwrite(f"{debug_dir}/{ts}_inner_disc.png", inner_disc)
+            cv2.imwrite(f"{debug_dir}/{ts}_outer_disc.png", outer_disc)
+            cv2.imwrite(f"{debug_dir}/{ts}_disc_mask.png", disc_mask)
             
-            for slider_angle in range(0, 361, step):
-                # Simula o movimento do slider:
-                # - Outer gira slider_angle graus no sentido ANTI-HORÁRIO (positivo no OpenCV)
-                # - Inner gira slider_angle graus no sentido HORÁRIO (negativo no OpenCV)
-                
-                # Rotaciona o outer (anti-horário = ângulo positivo)
-                rot_matrix_outer = cv2.getRotationMatrix2D(center_outer, slider_angle, 1.0)
-                rotated_outer = cv2.warpAffine(
-                    outer, 
-                    rot_matrix_outer, 
-                    (w_outer, h_outer),
-                    flags=cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_REPLICATE
-                )
-                
-                # Rotaciona o inner (horário = ângulo negativo)
-                rot_matrix_inner = cv2.getRotationMatrix2D(center_inner, -slider_angle, 1.0)
-                rotated_inner = cv2.warpAffine(
-                    inner, 
-                    rot_matrix_inner, 
-                    (w_inner, h_inner),
-                    flags=cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_REPLICATE
-                )
-                
-                # Extrai a região central do outer que corresponde ao inner
-                y_start = (h_outer - h_inner) // 2
-                x_start = (w_outer - w_inner) // 2
-                outer_center = rotated_outer[y_start:y_start+h_inner, x_start:x_start+w_inner]
-                
-                # Compara as regiões do anel (borda do inner) - MANTÉM CORES
-                # Aplica máscara em cada canal
-                outer_masked = cv2.bitwise_and(outer_center, outer_center, mask=ring_mask)
-                inner_masked = cv2.bitwise_and(rotated_inner, rotated_inner, mask=ring_mask)
-                
-                # Calcula diferença em cada canal e média
-                diff = cv2.absdiff(outer_masked, inner_masked)
-                mean_diff = np.mean(diff[ring_mask > 0]) if np.sum(ring_mask) > 0 else 255
-                
-                # Inverte para que maior score = melhor match
-                score = 255 - mean_diff
-                
-                scores.append((slider_angle, score))
-                
-                if score > best_score:
-                    best_score = score
-                    best_angle = slider_angle
+            logger.info(f"   📊 Disc Inner mean={np.mean(inner_disc):.1f}, Outer mean={np.mean(outer_disc):.1f}")
+            logger.info(f"   📊 Mask coverage={np.mean(disc_mask)/255*100:.1f}%")
             
-            logger.info(f"🏆 Melhor ângulo: {best_angle}° (score: {best_score:.2f})")
+            # ── METHOD 1: Grayscale direto com máscara ──
+            crop = 20
+            inner_cropped = inner_disc[:, crop:-crop].astype(np.float32)
+            mask_cropped = disc_mask[:, crop:-crop]
+            search_gray = np.hstack([outer_disc, outer_disc]).astype(np.float32)
             
-            # Se há múltiplos ângulos com score similar, escolhe o mais central (próximo de 180°)
-            similar_scores = [(angle, score) for angle, score in scores if abs(score - best_score) < 1.0]
-            if len(similar_scores) > 1:
-                logger.info(f"🔍 Encontrados {len(similar_scores)} ângulos com score similar")
-                # Escolhe o mais próximo de 180° (meio da rotação)
-                best_candidate = min(similar_scores, key=lambda x: abs(x[0] - 180))
-                best_angle = best_candidate[0]
-                logger.info(f"✨ Escolhido ângulo mais central: {best_angle}°")
+            res_gray = cv2.matchTemplate(search_gray, inner_cropped, cv2.TM_CCORR_NORMED, mask=mask_cropped)
+            _, max_val_gray, _, max_loc_gray = cv2.minMaxLoc(res_gray)
             
-            # Refina o resultado: testa ±step graus em passos de 1 grau
-            logger.info(f"🔬 Refinando resultado...")
-            refined_angle = best_angle
-            refined_score = best_score
+            best_x_gray = max_loc_gray[0] - crop
+            angle_gray = (best_x_gray / polar_w) * 360.0 % 360
             
-            for slider_angle in range(max(0, best_angle - step - 1), min(361, best_angle + step + 2)):
-                rot_matrix_outer = cv2.getRotationMatrix2D(center_outer, slider_angle, 1.0)
-                rotated_outer = cv2.warpAffine(
-                    outer, rot_matrix_outer, (w_outer, h_outer),
-                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
-                )
-                
-                rot_matrix_inner = cv2.getRotationMatrix2D(center_inner, -slider_angle, 1.0)
-                rotated_inner = cv2.warpAffine(
-                    inner, rot_matrix_inner, (w_inner, h_inner),
-                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
-                )
-                
-                y_start = (h_outer - h_inner) // 2
-                x_start = (w_outer - w_inner) // 2
-                outer_center = rotated_outer[y_start:y_start+h_inner, x_start:x_start+w_inner]
-                
-                outer_masked = cv2.bitwise_and(outer_center, outer_center, mask=ring_mask)
-                inner_masked = cv2.bitwise_and(rotated_inner, rotated_inner, mask=ring_mask)
-                
-                diff = cv2.absdiff(outer_masked, inner_masked)
-                mean_diff = np.mean(diff[ring_mask > 0]) if np.sum(ring_mask) > 0 else 255
-                score = 255 - mean_diff
-                
-                if score > refined_score:
-                    refined_score = score
-                    refined_angle = slider_angle
+            logger.info(f"   🎯 Disc Gray: {angle_gray:.2f}° (Conf: {max_val_gray:.4f})")
             
-            best_angle = refined_angle
-            best_score = refined_score
-            logger.info(f"✨ Refinado: {best_angle}° (score: {best_score:.2f})")
+            # ── METHOD 2: Sobel X com máscara ──
+            inner_blur = cv2.GaussianBlur(inner_disc, (3, 3), 0)
+            outer_blur = cv2.GaussianBlur(outer_disc, (3, 3), 0)
             
-            # DEBUG: Salva as melhores 3 rotações para análise visual
-            logger.info(f"💾 [Debug] Salvando top 3 rotações...")
-            scores_sorted = sorted(scores, key=lambda x: x[1], reverse=True)[:3]
+            sobel_inner = cv2.convertScaleAbs(cv2.Sobel(inner_blur, cv2.CV_64F, 1, 0, ksize=5))
+            sobel_outer = cv2.convertScaleAbs(cv2.Sobel(outer_blur, cv2.CV_64F, 1, 0, ksize=5))
             
-            for rank, (angle_deg, score_val) in enumerate(scores_sorted, 1):
-                # Rotaciona outer
-                rot_matrix_outer = cv2.getRotationMatrix2D(center_outer, angle_deg, 1.0)
-                rotated_outer = cv2.warpAffine(
-                    outer, rot_matrix_outer, (w_outer, h_outer),
-                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
-                )
-                
-                # Rotaciona inner
-                rot_matrix_inner = cv2.getRotationMatrix2D(center_inner, -angle_deg, 1.0)
-                rotated_inner = cv2.warpAffine(
-                    inner, rot_matrix_inner, (w_inner, h_inner),
-                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
-                )
-                
-                # Extrai região central
-                y_start = (h_outer - h_inner) // 2
-                x_start = (w_outer - w_inner) // 2
-                outer_center = rotated_outer[y_start:y_start+h_inner, x_start:x_start+w_inner]
-                
-                # Salva comparação lado a lado (EM CORES)
-                comparison = np.hstack([outer_center, rotated_inner])
-                cv2.imwrite(f"{debug_dir}/rank{rank}_angle{int(angle_deg)}_score{score_val:.0f}.png", comparison)
-                logger.info(f"   Rank {rank}: {angle_deg}° (score: {score_val:.2f})")
+            if np.max(sobel_inner) > 0:
+                sobel_inner = cv2.normalize(sobel_inner, None, 0, 255, cv2.NORM_MINMAX)
+            if np.max(sobel_outer) > 0:
+                sobel_outer = cv2.normalize(sobel_outer, None, 0, 255, cv2.NORM_MINMAX)
             
-            logger.info(f"✅ [Debug] Imagens salvas em {debug_dir}")
+            cv2.imwrite(f"{debug_dir}/{ts}_sobel_inner.png", sobel_inner)
+            cv2.imwrite(f"{debug_dir}/{ts}_sobel_outer.png", sobel_outer)
             
-            # Normaliza confidence (score vai de 0 a 255, queremos 0 a 1)
-            confidence = max(0, (best_score - 50) / 205.0)  # Normaliza 50-255 para 0-1
-            confidence = min(confidence, 1.0)
+            sobel_inner_cropped = sobel_inner[:, crop:-crop]
+            search_sobel = np.hstack([sobel_outer, sobel_outer])
             
-            # Define sucesso baseado no score e variação
-            score_std = float(np.std([s for _, s in scores]))
+            res_sobel = cv2.matchTemplate(search_sobel, sobel_inner_cropped, cv2.TM_CCOEFF_NORMED)
+            _, max_val_sobel, _, max_loc_sobel = cv2.minMaxLoc(res_sobel)
             
-            # SEMPRE retorna sucesso - deixa o Go tentar
-            success = True
+            best_x_sobel = max_loc_sobel[0] - crop
+            angle_sobel = (best_x_sobel / polar_w) * 360.0 % 360
             
-            if best_score < 80:
-                logger.warning(f"⚠️  Score baixo: {best_score:.2f}, mas tentando mesmo assim...")
+            logger.info(f"   🎯 Disc Sobel: {angle_sobel:.2f}° (Conf: {max_val_sobel:.2f})")
             
-            logger.info(f"📊 Stats: score={best_score:.2f}, std={score_std:.2f}, confidence={confidence:.2f}, success={success}")
+            # ── Escolhe melhor resultado ──
+            if max_val_gray >= max_val_sobel:
+                final_angle = angle_gray
+                final_conf = max_val_gray
+                method = "Disc Gray"
+            else:
+                final_angle = angle_sobel
+                final_conf = max_val_sobel
+                method = "Disc Sobel"
+            
+            logger.info(f"   🏆 Vencedor: {method} → {final_angle:.2f}° (Conf: {final_conf:.4f})")
             
             return {
-                'angle': int(best_angle),
-                'success': success,
-                'confidence': float(confidence)
+                'angle': int(final_angle),
+                'success': True,
+                'confidence': float(final_conf)
             }
-            
+
         except Exception as e:
-            logger.error(f"❌ Erro resolvendo rotação: {e}")
+            logger.error(f"❌ Erro na resolução Polar: {e}")
             import traceback
-            traceback.print_exc()
-            return {
-                'angle': 0,
-                'success': False,
-                'confidence': 0.0,
-                'error': str(e)
-            }
-    
+            logger.error(traceback.format_exc())
+            return {'success': False, 'angle': 0}
+
     async def solve_slider(self, bg_b64: str, piece_b64: str) -> dict:
         """
-        Resolve um captcha de slider
-        
-        Args:
-            bg_b64: Imagem background em Base64
-            piece_b64: Imagem da peça em Base64
-            
-        Returns:
-            Dict com resultado: {'x_offset': int, 'success': bool, 'confidence': float}
+        Resolve captcha de slider via Template Matching com Máscara.
+        Executa em thread separada.
         """
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._solve_slider_sync, bg_b64, piece_b64
+        )
+
+    def _solve_slider_sync(self, bg_b64: str, piece_b64: str) -> dict:
         try:
-            logger.info("🧩 Resolvendo captcha de slider...")
+            logger.info("🧩 Resolvendo captcha de slider (Masked Matching)...")
             
-            # Decodifica imagens
             background = self.decode_image(bg_b64)
             piece = self.decode_image(piece_b64)
             
             if background is None or piece is None:
-                return {
-                    'x_offset': 0,
-                    'success': False,
-                    'error': 'Falha ao decodificar imagens'
-                }
+                return {'success': False, 'error': 'Image decode failed'}
+
+            # Separa canais da peça (BGR + Alpha)
+            # Re-decodifica para garantir alpha channel
+            nparr_piece = np.frombuffer(base64.b64decode(piece_b64), np.uint8)
+            piece_with_alpha = cv2.imdecode(nparr_piece, cv2.IMREAD_UNCHANGED)
             
-            # Encontra posição (usa método simples primeiro)
-            result = self.find_piece_position(background, piece, threshold=0.3)
-            x_position, confidence = result
+            piece_mask = None
+            if piece_with_alpha is not None and piece_with_alpha.shape[2] == 4:
+                piece_bgr = piece_with_alpha[:, :, :3]
+                piece_mask = piece_with_alpha[:, :, 3]
+                logger.info("   mask alpha detectado na peça")
+            else:
+                piece_bgr = piece
+                logger.warning("   nenhum canal alpha detectado na peça")
             
-            # Se confiança muito baixa (<20%), tenta multi-escala
-            if confidence < 0.2:
-                logger.info("🔄 Confiança baixa. Tentando método multi-escala...")
-                x_multi, conf_multi = self.find_piece_position_multiscale(background, piece)
+            # Converte para Gray
+            bg_gray = cv2.cvtColor(background, cv2.COLOR_BGR2GRAY)
+            piece_gray = cv2.cvtColor(piece_bgr, cv2.COLOR_BGR2GRAY)
+            
+            # Template Matching
+            if piece_mask is not None:
+                res = cv2.matchTemplate(bg_gray, piece_gray, cv2.TM_CCORR_NORMED, mask=piece_mask)
+            else:
+                res = cv2.matchTemplate(bg_gray, piece_gray, cv2.TM_CCOEFF_NORMED)
                 
-                # Usa multi-escala se for melhor E não for 0
-                if conf_multi > confidence and x_multi and x_multi > 0:
-                    logger.info(f"✨ Multi-escala melhorou: {conf_multi:.2%} > {confidence:.2%}")
-                    x_position = x_multi
-                    confidence = conf_multi
-                elif x_multi == 0:
-                    logger.warning(f"⚠️  Multi-escala retornou X=0, mantendo valor anterior: {x_position}px")
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            best_x = max_loc[0]
             
-            if x_position is None or x_position <= 0:
-                return {
-                    'x_offset': 0,
-                    'success': False,
-                    'confidence': 0.0,
-                    'error': 'Não foi possível encontrar posição'
-                }
+            logger.info(f"   📍 Posição X encontrada: {best_x} (Confiança: {max_val:.2f})")
             
             return {
-                'x_offset': int(x_position),
+                'x': int(best_x),
+                'y': int(max_loc[1]),
                 'success': True,
-                'confidence': float(confidence)
+                'confidence': float(max_val)
             }
             
         except Exception as e:
-            logger.error(f"❌ Erro resolvendo captcha: {e}")
-            return {
-                'x_offset': 0,
-                'success': False,
-                'error': str(e)
-            }
+            logger.error(f"❌ Erro no slider: {e}")
+            return {'success': False, 'x': 0}
     
     async def handle_captcha_request(self, msg):
         """
@@ -630,7 +599,7 @@ class CaptchaSolver:
             # Se tem outer e inner, é rotação
             if outer_b64 and inner_b64:
                 logger.info("🔄 Tipo detectado: ROTATE")
-                response = self.solve_rotation(outer_b64, inner_b64)
+                response = await self.solve_rotation(outer_b64, inner_b64)
                 
                 if response['success']:
                     logger.info(f"✅ Resposta enviada: angle = {response['angle']}°")

@@ -170,3 +170,7 @@ send-payload: ## Envia um payload de teste (Vision -> Parser)
 
 help: ## Mostra este help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+vnc: ## 🖥️  Reinicia o servidor noVNC (acesse http://localhost:6080 no browser)
+	@bash /usr/local/bin/start-vnc.sh
+
