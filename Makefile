@@ -1,36 +1,72 @@
 .PHONY: all up down logs setup clean
-.PHONY: setup-go setup-python setup-discovery
-.PHONY: run-parser run-vision run-discovery run-captcha-solver
+.PHONY: setup-go setup-python setup-discovery setup-scraper
+.PHONY: run-parser run-vision run-discovery run-scraper run-captcha-solver
 .PHONY: send-payload nats-start nats-stop nats-test
 .PHONY: test-captcha test-captcha-full test-captcha-stop test-discovery-captcha
-.PHONY: build-discovery build-parser build-vision build-all
+.PHONY: build-discovery build-scraper build-parser build-vision build-all
 
-up:
+# 🚀 Project Argus - Makefile
+# ============================
+#
+# 🧪 Teste Rápido de Captcha (Vision + Discovery):
+#   1. make up                    # Inicia infraestrutura (NATS, Redis, etc)
+#   2. make run-captcha-solver    # Terminal 1: Inicia Vision Service
+#   3. make run-discovery         # Terminal 2: Inicia Discovery
+#
+# 📚 Comandos disponíveis:
+#   make help                     # Lista todos os comandos
+#
+# ============================
+
+# --- Infrastructure ---
+
+up: ## Sobe a infraestrutura (Docker)
 	docker-compose up -d
+	@echo "✅ Infraestrutura iniciada"
+	@echo "   NATS: nats://localhost:4222"
+	@echo "   Redis: localhost:6379"
+	@echo "   PostgreSQL: localhost:5432"
+	@echo "   Meilisearch: http://localhost:7700"
 
-down:
+down: ## Derruba a infraestrutura
 	docker-compose down
 
-logs:
+logs: ## Mostra os logs da infraestrutura
 	docker-compose logs -f
 
-setup: setup-go setup-discovery setup-python
+# --- Setup & Dependencies ---
+
+setup: setup-go setup-discovery setup-python ## Instala dependências de todos os serviços
+	@echo "Setup concluído!"
 
 setup-go:
+	@echo "Instalando deps do Parser (Go)..."
 	cd services/parser && go mod tidy
 
 setup-discovery:
+	@echo "Instalando deps do Discovery (Go)..."
 	cd services/discovery && go mod tidy
 
+setup-scraper:
+	@echo "Instalando deps do Scraper (Go)..."
+	cd services/scraper && go mod tidy
+
+
 setup-python:
+	@echo "Instalando deps do Vision (Python)..."
 	cd services/vision && pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 	cd services/vision && pip3 install -r requirements.txt
 
-run-parser:
+# --- Run Services ---
+
+run-parser: ## Roda o serviço Parser (Go)
 	cd services/parser && go run cmd/main.go
 
-run-discovery:
+run-discovery: ## Roda o serviço Discovery (Publisher)
 	cd services/discovery && go run main.go
+
+run-scraper: ## Roda o Scraper Worker (Subscriber)
+	cd services/scraper && go run main.go
 
 run-vision:
 	cd services/vision && python3 src/main.py
@@ -61,16 +97,25 @@ nats-test:
 test-captcha:
 	@./scripts/test-captcha.sh
 
-test-captcha-full:
-	@echo "Checking NATS..."
-	@docker ps | grep nats > /dev/null || (echo "NATS not running. Run: make up" && exit 1)
-	@echo "NATS OK"
+test-captcha-full: ## Teste completo: NATS + Vision + Discovery (manual)
+	@echo "🧪 Teste Completo de Captcha"
+	@echo "================================"
+	@echo ""
+	@echo "1️⃣  Verificando NATS..."
+	@docker ps | grep nats > /dev/null || (echo "❌ NATS não está rodando. Execute: make up" && exit 1)
+	@echo "✅ NATS rodando"
+	@echo ""
+	@echo "2️⃣  Iniciando Vision Service (background)..."
 	@cd services/vision && NATS_URL=nats://localhost:4222 python3 -m src.captcha_solver > /tmp/vision.log 2>&1 & echo $$! > /tmp/vision.pid
 	@sleep 2
-	@echo "Vision started (PID: $$(cat /tmp/vision.pid))"
-	@echo "Run discovery manually: cd services/discovery && go run main.go"
-	@echo "Vision logs: tail -f /tmp/vision.log"
-	@echo "Stop: make test-captcha-stop"
+	@echo "✅ Vision Service iniciado (PID: $$(cat /tmp/vision.pid))"
+	@echo ""
+	@echo "3️⃣  Testando Discovery (simulação)..."
+	@echo "   Para testar de verdade, execute manualmente:"
+	@echo "   cd services/discovery && go run main.go"
+	@echo ""
+	@echo "📝 Logs do Vision: tail -f /tmp/vision.log"
+	@echo "🛑 Para parar: make test-captcha-stop"
 
 test-captcha-stop:
 	@if [ -f /tmp/vision.pid ]; then \
@@ -88,13 +133,16 @@ test-discovery-captcha:
 build-discovery:
 	cd services/discovery && go build -o discovery main.go
 
+build-scraper:
+	cd services/scraper && go build -o scraper main.go
+
 build-parser:
 	cd services/parser && go build -o parser cmd/main.go
 
 build-vision:
 	docker build -t argus-vision:latest services/vision
 
-build-all: build-discovery build-parser build-vision
+build-all: build-discovery build-scraper build-parser build-vision
 
 test-full:
 	python3 tests/integration/test_full_flow.py

@@ -1,6 +1,9 @@
 package sources
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 type MockSource struct{}
 
@@ -8,16 +11,16 @@ func (m *MockSource) Name() string {
 	return "MockSource"
 }
 
-func (m *MockSource) Fetch(query string) ([]RawVideoMetadata, error) {
+func (m *MockSource) Fetch(_ context.Context, query string) ([]DiscoveredVideo, error) {
 	fmt.Printf("[MockSource] Buscando por #%s...\n", query)
-	return []RawVideoMetadata{
+	return []DiscoveredVideo{
 		{
-			ID:          "mock-video-1",
-			Title:       "Mock Video",
-			Description: "Descrição de teste",
-			URL:         "https://www.youtube.com/shorts/IknOw-k2nB0",
-			Author:      "tester",
-			Comments:    []RawComment{{Nick: "user1", Text: "nice"}, {Nick: "user2", Text: "cool"}},
+			ID:  "mock-video-1",
+			URL: "https://www.tiktok.com/@user/video/mock-video-1",
 		},
 	}, nil
+}
+
+func (m *MockSource) Close() error {
+	return nil
 }

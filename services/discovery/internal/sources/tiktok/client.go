@@ -1,35 +1,43 @@
 package tiktok
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
+
+	"discovery/internal/repository"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
 )
 
 const (
-	fetchTimeout    = 90 * time.Second
-	perVideoTimeout = 20 * time.Second
+	fetchTimeout = 90 * time.Second
 )
 
+// Source é o scraper de discovery do TikTok.
+// Responsável APENAS por navegar em hashtag pages e coletar URLs de vídeos.
+// Não abre páginas de vídeos individuais — isso é responsabilidade do Scraper Worker.
 type Source struct {
 	browser *rod.Browser
+	dedup   *repository.Deduplicator
 }
 
 const maxVideos = 15
 
-func NewSource() *Source {
+// NewSource cria uma nova instância do TikTok discovery source.
+// O browser persiste sessão em ./browser_state_discovery para manter cookies/tokens
+// e evitar captchas repetidos na página da hashtag.
+func NewSource(dedup *repository.Deduplicator) *Source {
 	path, _ := launcher.LookPath()
 
 	l := launcher.New().
 		Bin(path).
+		UserDataDir("./browser_state_discovery"). // Persiste sessão para hashtag pages
+		Leakless(false).
 		Headless(false).
 		Devtools(true)
 
@@ -38,14 +46,30 @@ func NewSource() *Source {
 
 	go browser.ServeMonitor(":9222")
 
-	return &Source{browser: browser}
+	return &Source{browser: browser, dedup: dedup}
 }
 
 func (s *Source) Name() string {
-	return "TikTok-Rod-Full"
+	return "TikTok-Rod-Discovery"
 }
 
-func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
+// Close fecha o browser
+func (s *Source) Close() error {
+	if s.browser != nil {
+		return s.browser.Close()
+	}
+	return nil
+}
+
+// DiscoveredVideo contém apenas o ID e URL de um vídeo descoberto.
+type DiscoveredVideo struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// Fetch navega na hashtag page, coleta links de vídeo, filtra pelo Redis (IsNew),
+// e retorna apenas os vídeos ainda não processados.
+func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, error) {
 	page, err := stealth.Page(s.browser)
 	if err != nil {
 		return nil, fmt.Errorf("erro criando pagina stealth: %w", err)
@@ -54,16 +78,22 @@ func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
 
 	start := time.Now()
 
-	if strings.Contains(query, "tiktok.com") {
-		meta, err := s.processVideo(query)
+	// Se a query já é uma URL direta de vídeo, retorna diretamente (sem filtro Redis aqui)
+	if strings.Contains(query, "tiktok.com") && strings.Contains(query, "/video/") {
+		videoID := extractID(query)
+		isNew, err := s.dedup.IsNew(ctx, videoID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("erro redis para %s: %w", videoID, err)
 		}
-		return []RawVideoMetadata{meta}, nil
+		if !isNew {
+			fmt.Printf("[Discovery] skip (já visto): %s\n", videoID)
+			return nil, nil
+		}
+		return []DiscoveredVideo{{ID: videoID, URL: query}}, nil
 	}
 
 	tagURL := fmt.Sprintf("https://www.tiktok.com/tag/%s", query)
-	fmt.Printf("[Rod] tag: %s\n", tagURL)
+	fmt.Printf("[Discovery] hashtag: %s\n", tagURL)
 
 	if err := page.Timeout(fetchTimeout).Navigate(tagURL); err != nil {
 		return nil, err
@@ -72,7 +102,7 @@ func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
 	time.Sleep(3 * time.Second)
 
 	if err := page.Reload(); err != nil {
-		fmt.Printf("[Rod] reload error: %v\n", err)
+		fmt.Printf("[Discovery] reload error: %v\n", err)
 	}
 	page.Timeout(15 * time.Second).WaitLoad()
 	time.Sleep(2 * time.Second)
@@ -87,9 +117,10 @@ func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
 	}
 
 	if _, err := page.Timeout(15 * time.Second).Element(`a[href*="/video/"]`); err != nil {
-		fmt.Printf("[Rod] nenhum video detectado ainda: %v\n", err)
+		fmt.Printf("[Discovery] nenhum video detectado ainda: %v\n", err)
 	}
 
+	// Scroll para carregar mais vídeos
 	for i := 0; i < 8; i++ {
 		page.Mouse.Scroll(0, 1200, 1)
 		time.Sleep(1500 * time.Millisecond)
@@ -104,204 +135,68 @@ func (s *Source) Fetch(query string) ([]RawVideoMetadata, error) {
 		return nil, fmt.Errorf("timeout ao coletar videos")
 	}
 
+	// Coleta os hrefs dos links de vídeo
+	rawURLs := s.collectVideoURLs(page)
+
+	rawURLs = unique(rawURLs)
+	if len(rawURLs) > maxVideos {
+		rawURLs = rawURLs[:maxVideos]
+	}
+
+	fmt.Printf("[Discovery] %d URLs únicas encontradas, filtrando pelo Redis...\n", len(rawURLs))
+
+	// Top-of-Funnel: filtra pelo Redis
+	var discovered []DiscoveredVideo
+	for _, rawURL := range rawURLs {
+		videoID := extractID(rawURL)
+		if videoID == "" {
+			continue
+		}
+
+		isNew, err := s.dedup.IsNew(ctx, videoID)
+		if err != nil {
+			fmt.Printf("[Discovery] erro redis para %s: %v\n", videoID, err)
+			continue
+		}
+		if !isNew {
+			fmt.Printf("[Discovery] skip (já visto): %s\n", videoID)
+			continue
+		}
+
+		discovered = append(discovered, DiscoveredVideo{ID: videoID, URL: rawURL})
+	}
+
+	fmt.Printf("[Discovery] %d vídeos novos após filtro Redis\n", len(discovered))
+	return discovered, nil
+}
+
+// collectVideoURLs extrai todas as URLs de vídeo da página da hashtag.
+func (s *Source) collectVideoURLs(page *rod.Page) []string {
 	videoLinks, err := page.Timeout(5 * time.Second).Elements(`a[href*="/video/"]`)
 	if err != nil {
+		// Fallback: busca em todos os links
 		allLinks, err2 := page.Timeout(5 * time.Second).Elements("a")
 		if err2 != nil {
-			return nil, fmt.Errorf("erro buscando links: %w", err2)
+			return nil
 		}
-		var urlsToVisit []string
+		var urls []string
 		for _, link := range allLinks {
 			href, herr := link.Attribute("href")
 			if herr == nil && href != nil && strings.Contains(*href, "/video/") {
-				urlsToVisit = append(urlsToVisit, *href)
+				urls = append(urls, *href)
 			}
 		}
-		urlsToVisit = unique(urlsToVisit)
-		if len(urlsToVisit) > maxVideos {
-			urlsToVisit = urlsToVisit[:maxVideos]
-		}
-		return s.processVideos(urlsToVisit)
+		return urls
 	}
 
-	var urlsToVisit []string
+	var urls []string
 	for _, link := range videoLinks {
 		href, err := link.Attribute("href")
 		if err == nil && href != nil && strings.Contains(*href, "/video/") {
-			urlsToVisit = append(urlsToVisit, *href)
+			urls = append(urls, *href)
 		}
 	}
-	urlsToVisit = unique(urlsToVisit)
-	if len(urlsToVisit) > maxVideos {
-		urlsToVisit = urlsToVisit[:maxVideos]
-	}
-
-	fmt.Printf("[Rod] %d videos unicos encontrados\n", len(urlsToVisit))
-	return s.processVideos(urlsToVisit)
-}
-
-func (s *Source) processVideos(urls []string) ([]RawVideoMetadata, error) {
-	var results []RawVideoMetadata
-	for _, videoURL := range urls {
-		time.Sleep(1 * time.Second)
-		meta, err := s.processVideo(videoURL)
-		if err != nil {
-			fmt.Printf("[Rod] erro em %s: %v\n", videoURL, err)
-			continue
-		}
-		results = append(results, meta)
-	}
-	return results, nil
-}
-
-func (s *Source) processVideo(urlStr string) (RawVideoMetadata, error) {
-	page, _ := stealth.Page(s.browser)
-	defer page.Close()
-
-	router := page.HijackRequests()
-
-	var mu sync.Mutex
-	var capturedComments []RawComment
-
-	router.MustAdd("*/comment/list/*", func(ctx *rod.Hijack) {
-		ctx.MustLoadResponse()
-		body := ctx.Response.Payload().Body
-		var resp TikTokAPIResponse
-		if err := json.Unmarshal(body, &resp); err == nil {
-			mu.Lock()
-			for _, c := range resp.Comments {
-				capturedComments = append(capturedComments, RawComment{
-					Nick: c.User.UniqueId,
-					Text: strings.ReplaceAll(c.Text, "\n", " "),
-				})
-			}
-			mu.Unlock()
-		}
-	})
-
-	router.MustAdd("*/comment/reply/list/*", func(ctx *rod.Hijack) {
-		ctx.MustLoadResponse()
-		body := ctx.Response.Payload().Body
-		var resp TikTokAPIResponse
-		if err := json.Unmarshal(body, &resp); err == nil {
-			mu.Lock()
-			for _, c := range resp.Comments {
-				capturedComments = append(capturedComments, RawComment{
-					Nick: c.User.UniqueId,
-					Text: "[reply] " + strings.ReplaceAll(c.Text, "\n", " "),
-				})
-			}
-			mu.Unlock()
-		}
-	})
-
-	go router.Run()
-
-	if err := page.Timeout(perVideoTimeout).Navigate(urlStr); err != nil {
-		return RawVideoMetadata{}, err
-	}
-	page.Timeout(10 * time.Second).WaitLoad()
-	time.Sleep(2 * time.Second)
-
-	if err := page.Reload(); err != nil {
-		fmt.Printf("[Rod] reload error: %v\n", err)
-	} else {
-		page.Timeout(10 * time.Second).WaitLoad()
-	}
-	time.Sleep(3 * time.Second)
-
-	if isCaptchaPresent(page) {
-		if err := s.handleCaptcha(page); err != nil {
-			return RawVideoMetadata{}, err
-		}
-		page.Timeout(10 * time.Second).WaitLoad()
-		time.Sleep(3 * time.Second)
-	}
-
-	commentSelectors := []string{
-		`[data-e2e="comment-icon"]`,
-		`[data-e2e="browse-comment"]`,
-		`button[aria-label*="omment"]`,
-		`strong[data-e2e="comment-count"]`,
-		`span[data-e2e="comment-count"]`,
-	}
-	for _, sel := range commentSelectors {
-		if el, err := page.Timeout(2 * time.Second).Element(sel); err == nil {
-			if err2 := el.Click(proto.InputMouseButtonLeft, 1); err2 == nil {
-				fmt.Printf("[Rod] comentarios clicados via: %s\n", sel)
-				break
-			}
-		}
-	}
-
-	for pass := 0; pass < 4; pass++ {
-		time.Sleep(1500 * time.Millisecond)
-		page.Eval(`() => {
-			const panel = document.querySelector(
-				'[data-e2e="comment-list"], [class*="DivCommentListContainer"], [class*="CommentListScroller"]'
-			);
-			if (panel) { panel.scrollTop += 800; }
-			else { window.scrollBy(0, 400); }
-		}`)
-		time.Sleep(1 * time.Second)
-
-		replyBtns, _ := page.Elements(
-			`[data-e2e="view-more-replies"], [class*="SpanViewMoreReply"], span[class*="view-more"]`,
-		)
-		for _, btn := range replyBtns {
-			_ = btn.Click(proto.InputMouseButtonLeft, 1)
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
-
-	time.Sleep(3 * time.Second)
-
-	descText := extractDescription(page)
-
-	fmt.Printf("[Rod] video=%s desc=%q comentarios=%d\n",
-		extractID(urlStr), truncate(descText, 60), len(capturedComments))
-
-	return RawVideoMetadata{
-		URL:         urlStr,
-		Description: descText,
-		Comments:    capturedComments,
-		ID:          extractID(urlStr),
-	}, nil
-}
-
-func extractDescription(page *rod.Page) string {
-	for _, sel := range []string{
-		`[data-e2e="browse-video-desc"]`,
-		`[data-e2e="video-desc"]`,
-		`[data-e2e="new-desc-paragraph"]`,
-	} {
-		if el, err := page.Timeout(2 * time.Second).Element(sel); err == nil {
-			if text, err := el.Text(); err == nil && text != "" {
-				return text
-			}
-		}
-	}
-
-	if el, err := page.Timeout(2 * time.Second).Element(`h1`); err == nil {
-		if text, err := el.Text(); err == nil && text != "" {
-			return text
-		}
-	}
-
-	if el, err := page.Timeout(1 * time.Second).Element(`meta[property="og:description"]`); err == nil {
-		if content, err := el.Attribute("content"); err == nil && content != nil && *content != "" {
-			return *content
-		}
-	}
-
-	return ""
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
+	return urls
 }
 
 func (s *Source) handleCaptcha(page *rod.Page) error {
@@ -389,4 +284,29 @@ func extractID(rawURL string) string {
 	}
 	parts := strings.Split(rawURL, "/")
 	return parts[len(parts)-1]
+}
+
+func parseCount(s string) int {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	if s == "" {
+		return 0
+	}
+
+	multiplier := 1.0
+	if strings.HasSuffix(s, "K") {
+		multiplier = 1000.0
+		s = strings.TrimSuffix(s, "K")
+	} else if strings.HasSuffix(s, "M") {
+		multiplier = 1000000.0
+		s = strings.TrimSuffix(s, "M")
+	} else if strings.HasSuffix(s, "B") {
+		multiplier = 1000000000.0
+		s = strings.TrimSuffix(s, "B")
+	}
+
+	s = strings.ReplaceAll(s, ",", ".") // Tratar vírgulas como decimais
+
+	var val float64
+	fmt.Sscanf(s, "%f", &val)
+	return int(val * multiplier)
 }

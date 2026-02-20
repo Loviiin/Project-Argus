@@ -1,18 +1,21 @@
 package sources
 
 import (
+	"context"
+
+	"discovery/internal/repository"
 	"discovery/internal/sources/tiktok"
 )
 
-// TikTokWrapper implementa a interface Source convertendo tipos
+// TikTokWrapper implementa a interface Source convertendo tipos do pacote tiktok.
 type TikTokWrapper struct {
 	source *tiktok.TikTokRodSource
 }
 
-// NewTikTokRodSource cria uma nova instância do scraper TikTok
-func NewTikTokRodSource() Source {
+// NewTikTokRodSource cria uma nova instância do scraper TikTok Discovery.
+func NewTikTokRodSource(dedup *repository.Deduplicator) Source {
 	return &TikTokWrapper{
-		source: tiktok.NewTikTokRodSource(),
+		source: tiktok.NewTikTokRodSource(dedup),
 	}
 }
 
@@ -21,30 +24,26 @@ func (w *TikTokWrapper) Name() string {
 	return w.source.Name()
 }
 
-// Fetch executa a busca e converte os tipos
-func (w *TikTokWrapper) Fetch(query string) ([]RawVideoMetadata, error) {
-	results, err := w.source.Fetch(query)
+// Fetch descobre URLs e retorna vídeos novos (já filtrados pelo Redis).
+func (w *TikTokWrapper) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, error) {
+	results, err := w.source.Fetch(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	// Converte os tipos do pacote tiktok para o tipo do pacote sources
-	var converted []RawVideoMetadata
+	// Converte tiktok.DiscoveredVideo → sources.DiscoveredVideo
+	var converted []DiscoveredVideo
 	for _, r := range results {
-		// Converte []tiktok.RawComment → []sources.RawComment
-		comments := make([]RawComment, len(r.Comments))
-		for i, c := range r.Comments {
-			comments[i] = RawComment{Nick: c.Nick, Text: c.Text}
-		}
-		converted = append(converted, RawVideoMetadata{
-			ID:          r.ID,
-			Title:       r.Title,
-			Description: r.Description,
-			URL:         r.URL,
-			Author:      r.Author,
-			Comments:    comments,
+		converted = append(converted, DiscoveredVideo{
+			ID:  r.ID,
+			URL: r.URL,
 		})
 	}
 
 	return converted, nil
+}
+
+// Close encerra o browser interno
+func (w *TikTokWrapper) Close() error {
+	return w.source.Close()
 }

@@ -1,8 +1,13 @@
 package sources
 
+import "context"
+
 // Source é a interface que qualquer fonte de dados (TikTok, YouTube) deve implementar.
 type Source interface {
 	Name() string
-	// Fetch busca dados baseados em um termo ou URL e retorna uma lista de metadados.
-	Fetch(query string) ([]RawVideoMetadata, error)
+	// Fetch descobre URLs de vídeos baseadas em um termo de busca.
+	// Retorna apenas metadados mínimos (ID + URL) já filtrados pelo Redis.
+	Fetch(ctx context.Context, query string) ([]DiscoveredVideo, error)
+	// Close encerra e limpa recursos usados pela fonte (ex: navegadores)
+	Close() error
 }

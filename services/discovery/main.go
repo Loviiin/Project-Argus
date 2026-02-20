@@ -19,20 +19,29 @@ import (
 func main() {
 	cfg := config.LoadConfig()
 
-	fmt.Println("Argus Discovery Service (Go-Rod) iniciando...")
+	fmt.Println("Argus Discovery Service (Publisher) iniciando...")
 
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {
 		log.Fatal("Erro NATS:", err)
 	}
-	js, _ := nc.JetStream()
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Fatal("Erro JetStream:", err)
+	}
 	defer nc.Close()
 
-	dedup := repository.NewDeduplicator(cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
-	log.Println("Inicializando driver do navegador...")
-	tikTokSource := sources.NewTikTokRodSource()
+	// Garante que o stream SCRAPE existe
+	if err := service.EnsureStream(js); err != nil {
+		log.Fatal("Erro criando stream SCRAPE:", err)
+	}
+	log.Println("Stream SCRAPE (jobs.scrape) pronto")
 
-	svc := service.NewDiscoveryService(dedup, js, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
+	dedup := repository.NewDeduplicator(cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
+	log.Println("Inicializando driver do navegador (Discovery)...")
+	tikTokSource := sources.NewTikTokRodSource(dedup)
+
+	svc := service.NewDiscoveryService(js, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
 
 	interval := time.Duration(cfg.Discovery.Interval) * time.Second
 	if interval == 0 {
@@ -42,7 +51,7 @@ func main() {
 	defer ticker.Stop()
 
 	cycle := func() {
-		fmt.Println("\n--- Iniciando ciclo de busca ---")
+		fmt.Println("\n--- Iniciando ciclo de discovery ---")
 		svc.Run(cfg.Discovery.Hashtags)
 	}
 
@@ -51,14 +60,15 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	fmt.Println("Discovery Service rodando! Aguardando jobs...")
+	fmt.Println("Discovery Service (Publisher) rodando! Publicando em jobs.scrape...")
 
 	for {
 		select {
 		case <-ticker.C:
 			cycle()
 		case <-sig:
-			fmt.Println("Encerrando...")
+			fmt.Println("\nEncerrando Discovery Service...")
+			svc.Close()
 			return
 		}
 	}
