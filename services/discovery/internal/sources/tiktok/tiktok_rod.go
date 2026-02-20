@@ -1,15 +1,20 @@
 package tiktok
 
-// TikTokRodSource é um wrapper para manter compatibilidade com o código existente
-// A implementação real agora está no pacote tiktok/
+import (
+	"context"
+
+	"discovery/internal/repository"
+)
+
+// TikTokRodSource é um wrapper para manter compatibilidade com o código existente.
 type TikTokRodSource struct {
 	source *Source
 }
 
-// NewTikTokRodSource cria uma nova instância do scraper TikTok
-func NewTikTokRodSource() *TikTokRodSource {
+// NewTikTokRodSource cria uma nova instância do scraper TikTok Discovery.
+func NewTikTokRodSource(dedup *repository.Deduplicator) *TikTokRodSource {
 	return &TikTokRodSource{
-		source: NewSource(),
+		source: NewSource(dedup),
 	}
 }
 
@@ -18,13 +23,12 @@ func (t *TikTokRodSource) Name() string {
 	return t.source.Name()
 }
 
-// Fetch executa a busca e extração de dados do TikTok
-func (t *TikTokRodSource) Fetch(query string) ([]RawVideoMetadata, error) {
-	results, err := t.source.Fetch(query)
-	if err != nil {
-		return nil, err
-	}
+// Fetch descobre URLs de vídeos e retorna apenas os novos (filtrados pelo Redis).
+func (t *TikTokRodSource) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, error) {
+	return t.source.Fetch(ctx, query)
+}
 
-	// Results já são do mesmo tipo, apenas retorna
-	return results, nil
+// Close encerra a instância do navegador
+func (t *TikTokRodSource) Close() error {
+	return t.source.Close()
 }

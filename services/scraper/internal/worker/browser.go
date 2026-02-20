@@ -1,0 +1,38 @@
+package worker
+
+import (
+	"fmt"
+
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
+)
+
+// NewBrowser cria uma instância de browser Rod com estado persistente.
+// O UserDataDir garante que cookies, localStorage e tokens de segurança
+// sejam mantidos entre execuções, evitando captchas repetidos.
+func NewBrowser(stateDir string) (*rod.Browser, error) {
+	path, _ := launcher.LookPath()
+
+	l := launcher.New().
+		Bin(path).
+		UserDataDir(stateDir).
+		Leakless(false).
+		Headless(false).
+		Devtools(true).
+		Set("autoplay-policy", "no-user-gesture-required"). // Permite autoplay de vídeos
+		Set("use-gl", "swiftshader").                       // Software rendering para containers
+		Set("disable-gpu").                                 // Evita problemas de GPU em containers
+		Set("no-sandbox")                                   // Necessário em containers Linux
+
+	u, err := l.Launch()
+	if err != nil {
+		return nil, fmt.Errorf("erro ao iniciar browser: %w", err)
+	}
+
+	browser := rod.New().ControlURL(u).MustConnect()
+
+	// Monitor para debug remoto
+	go browser.ServeMonitor(":9223")
+
+	return browser, nil
+}

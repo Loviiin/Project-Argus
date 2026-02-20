@@ -27,6 +27,11 @@ type Config struct {
 		URL string `yaml:"url"`
 	} `yaml:"nats"`
 
+	Scraper struct {
+		Workers         int    `yaml:"workers"`
+		BrowserStateDir string `yaml:"browser_state_dir"`
+	} `yaml:"scraper"`
+
 	Redis struct {
 		Address  string `yaml:"address"`
 		Password string `yaml:"password"`
