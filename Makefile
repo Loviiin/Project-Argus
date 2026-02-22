@@ -53,9 +53,15 @@ setup-scraper:
 
 
 setup-python:
+<<<<<<< Updated upstream
 	@echo "Instalando deps do Vision (Python)..."
 	cd services/vision && pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 	cd services/vision && pip3 install -r requirements.txt
+=======
+	cd services/vision && python3 -m venv .venv
+	cd services/vision && ./.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+	cd services/vision && ./.venv/bin/pip install -r requirements.txt
+>>>>>>> Stashed changes
 
 # --- Run Services ---
 
@@ -69,10 +75,10 @@ run-scraper: ## Roda o Scraper Worker (Subscriber)
 	cd services/scraper && go run main.go
 
 run-vision:
-	cd services/vision && python3 src/main.py
+	cd services/vision && ./.venv/bin/python src/main.py
 
 run-captcha-solver:
-	cd services/vision && python3 -m src.captcha_solver
+	cd services/vision && ./.venv/bin/python -m src.captcha_solver
 
 nats-start:
 	@if command -v nats-server > /dev/null; then \
@@ -97,6 +103,7 @@ nats-test:
 test-captcha:
 	@./scripts/test-captcha.sh
 
+<<<<<<< Updated upstream
 test-captcha-full: ## Teste completo: NATS + Vision + Discovery (manual)
 	@echo "🧪 Teste Completo de Captcha"
 	@echo "================================"
@@ -107,6 +114,13 @@ test-captcha-full: ## Teste completo: NATS + Vision + Discovery (manual)
 	@echo ""
 	@echo "2️⃣  Iniciando Vision Service (background)..."
 	@cd services/vision && NATS_URL=nats://localhost:4222 python3 -m src.captcha_solver > /tmp/vision.log 2>&1 & echo $$! > /tmp/vision.pid
+=======
+test-captcha-full:
+	@echo "Checking NATS..."
+	@docker ps | grep nats > /dev/null || (echo "NATS not running. Run: make up" && exit 1)
+	@echo "NATS OK"
+	@cd services/vision && NATS_URL=nats://localhost:4222 ./.venv/bin/python -m src.captcha_solver > /tmp/vision.log 2>&1 & echo $$! > /tmp/vision.pid
+>>>>>>> Stashed changes
 	@sleep 2
 	@echo "✅ Vision Service iniciado (PID: $$(cat /tmp/vision.pid))"
 	@echo ""
@@ -145,13 +159,13 @@ build-vision:
 build-all: build-discovery build-scraper build-parser build-vision
 
 test-full:
-	python3 tests/integration/test_full_flow.py
+	./services/vision/.venv/bin/python tests/integration/test_full_flow.py
 
 test-vision-job:
-	python3 services/vision/tests/test_vision_job.py
+	./services/vision/.venv/bin/python services/vision/tests/test_vision_job.py
 
 send-payload:
-	python3 services/vision/tests/test_vision_payload.py
+	./services/vision/.venv/bin/python services/vision/tests/test_vision_payload.py
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-22s %s\n", $$1, $$2}'
