@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -71,9 +74,40 @@ func main() {
 	// 1. FAST INGESTION FLOW
 	// ==========================================
 	subFast, err := js.Subscribe("data.text_extracted", func(msg *nats.Msg) {
+		meta, err := msg.Metadata()
+		if err != nil {
+			msg.Ack()
+			return
+		}
+
 		var payload dto.OcrMessage
 		if err := json.Unmarshal(msg.Data, &payload); err != nil {
 			log.Printf("[Fast Ingestion] Erro decodificando JSON: %v", err)
+			msg.Ack()
+			return
+		}
+
+		// Idempotência Determinística
+		cleanPath := strings.TrimSpace(payload.SourcePath)
+		hash := md5.Sum([]byte(cleanPath))
+		hashStr := hex.EncodeToString(hash[:])
+		idempotencyKey := fmt.Sprintf("argus:processed_job:fast_ingestion:%s", hashStr)
+
+		exists, err := rdb.Exists(context.Background(), idempotencyKey).Result()
+		if err == nil && exists > 0 {
+			log.Printf("[Fast Ingestion] Mensagem duplicada ignorada: %s", hashStr)
+			msg.Ack()
+			return
+		}
+
+		if meta.NumDelivered > 5 {
+			log.Printf("[Fast Ingestion] 🚨 Max Retries atingido para %s. Enviando para DLQ...", hashStr)
+			dlqData, _ := json.Marshal(map[string]interface{}{
+				"error":    "Max retries exceeded",
+				"payload":  payload,
+				"metadata": map[string]interface{}{"num_delivered": meta.NumDelivered, "timestamp": time.Now()},
+			})
+			js.Publish("argus.dlq.parser_fast", dlqData)
 			msg.Ack()
 			return
 		}
@@ -100,7 +134,6 @@ func main() {
 
 				fmt.Printf("[Fast Ingestion] Encontrado: %s\n", inviteCode)
 
-				// Salva bruto no banco (se falhar ignora para não travar o loop)
 				author := payload.AuthorID
 				if author == "" {
 					author = "desconhecido"
@@ -113,36 +146,53 @@ func main() {
 					RawOcrText:        payload.TextContent,
 					RiskScore:         0,
 				}
-				repo.Save(context.Background(), artifact)
 
-				// Upsert imediato e BRUTO no Meilisearch
-				err := indexer.IndexData(map[string]interface{}{
+				if err := repo.Save(context.Background(), artifact); err != nil {
+					fmt.Printf("[Fast Ingestion] Erro BD: %v\n", err)
+					delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+					msg.NakWithDelay(delay)
+					return
+				}
+
+				err = indexer.IndexData(map[string]interface{}{
 					"invite_code":         inviteCode,
 					"source_url":          payload.SourcePath,
 					"timestamp_formatted": time.Now().Format("02/01/2006 15:04:05"),
 				})
 				if err != nil {
 					fmt.Printf("[Fast Ingestion] Falha na indexação bruta: %v\n", err)
+					delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+					msg.NakWithDelay(delay)
+					return
 				}
 
-				// Publica no tópico de Enrich (Assíncrono)
 				enrichJob, _ := json.Marshal(dto.DiscordEnrichJob{InviteCode: inviteCode})
-				js.Publish("jobs.enrich.discord", enrichJob)
+				if _, err := js.Publish("jobs.enrich.discord", enrichJob); err != nil {
+					log.Printf("[Fast Ingestion] Erro publicando %s para enrich: %v", inviteCode, err)
+					// Ignore publish errors so we don't block the ingestion flow fully
+				}
 			}
 		}
 
+		// Sucesso: Grava chave idempotencia e Ack
+		rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
 		msg.Ack()
-	}, nats.Durable("parser-fast-ingestion"), nats.DeliverAll(), nats.InactiveThreshold(30*time.Second))
+	}, nats.Durable("parser-fast-ingestion"), nats.DeliverAll(), nats.InactiveThreshold(30*time.Second), nats.ManualAck())
 
 	if err != nil {
 		log.Fatalf("Erro ao iniciar Fast Ingestion: %v", err)
 	}
-	defer subFast.Unsubscribe()
 
 	// ==========================================
 	// 2. DISCORD ENRICHER FLOW
 	// ==========================================
 	subEnrich, err := js.Subscribe("jobs.enrich.discord", func(msg *nats.Msg) {
+		meta, err := msg.Metadata()
+		if err != nil {
+			msg.Ack()
+			return
+		}
+
 		var job dto.DiscordEnrichJob
 		if err := json.Unmarshal(msg.Data, &job); err != nil {
 			log.Printf("[Enricher] Erro decodificando Job: %v", err)
@@ -150,45 +200,63 @@ func main() {
 			return
 		}
 
-		fmt.Printf("[Enricher] Processando: %s\n", job.InviteCode)
+		idempotencyKey := fmt.Sprintf("argus:processed_job:%s", job.InviteCode)
+		exists, err := rdb.Exists(context.Background(), idempotencyKey).Result()
+		if err == nil && exists > 0 {
+			log.Printf("[Enricher] Mensagem duplicada ignorada: %s", job.InviteCode)
+			msg.Ack()
+			return
+		}
+
+		if meta.NumDelivered > 5 {
+			log.Printf("[Enricher] 🚨 Max Retries atingido para %s. Enviando para DLQ...", job.InviteCode)
+			dlqData, _ := json.Marshal(map[string]interface{}{
+				"error":    "Max retries exceeded",
+				"job":      job,
+				"metadata": map[string]interface{}{"num_delivered": meta.NumDelivered, "timestamp": time.Now()},
+			})
+			js.Publish("argus.dlq.parser_enricher", dlqData)
+			msg.Ack()
+			return
+		}
+
+		fmt.Printf("[Enricher] Processando: %s [Tentativa: %d]\n", job.InviteCode, meta.NumDelivered)
 
 		// 1. Checa no Meilisearch SE o registro já NÃO tem os campos enriquecidos:
 		if existingDoc, err := indexer.GetDocument(job.InviteCode); err == nil {
 			if existingDoc.ServerName != "" && existingDoc.Icon != "" {
-				// Já foi enriquecido previamente! Podemos poupar a API do Discord e ignorar:
 				fmt.Printf("[Enricher] ⏭️ Skiped: %s já enriquecido (%s). Poupando a API.\n", job.InviteCode, existingDoc.ServerName)
+				rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
 				msg.Ack()
 				return
 			}
 		}
 
-		// Chama a API do Discord (ou Redis cache).
-		// Se bater Rate Limit (429), erro vai ser "rate limited".
 		inviteInfo, err := discordClient.GetInviteInfo(context.Background(), job.InviteCode)
 		if err != nil {
-			if strings.Contains(err.Error(), "rate limited") {
-				// Devolve pra fila com um delay maior pra mandar pro "final da fila"
-				// O rate limit do Discord bloqueia o IP momentaneamente.
+			errMsg := strings.ToLower(err.Error())
+			if strings.Contains(errMsg, "rate limited") || strings.Contains(errMsg, "429") {
+				fmt.Printf("[Enricher] Rate limited no Discord API para %s. Nak 1 min.\n", job.InviteCode)
 				msg.NakWithDelay(1 * time.Minute)
 				return
 			}
-			if strings.Contains(err.Error(), "inválido ou expirado") {
-				// Erro permanente, descarta
+			if strings.Contains(errMsg, "inválido ou expirado") || strings.Contains(errMsg, "404") {
 				fmt.Printf("[Enricher] %s expirado/inválido. Descartando.\n", job.InviteCode)
+				rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
 				msg.Ack()
 				return
 			}
 
 			// Outros erros
 			fmt.Printf("[Enricher] Erro inesperado %s: %v\n", job.InviteCode, err)
-			msg.NakWithDelay(1 * time.Minute)
+			delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+			msg.NakWithDelay(delay)
 			return
 		}
 
 		fmt.Printf("[Enricher] Dados Sucesso: %s → %s | Membros: %d\n",
 			job.InviteCode, inviteInfo.Guild.Name, inviteInfo.ApproximateMemberCount)
 
-		// Parial Update no Meilisearch com os dados ricos
 		var iconURL string
 		if inviteInfo.Guild.Icon != "" {
 			iconURL = fmt.Sprintf("https://cdn.discordapp.com/icons/%s/%s.png", inviteInfo.Guild.ID, inviteInfo.Guild.Icon)
@@ -202,22 +270,44 @@ func main() {
 		})
 		if err != nil {
 			fmt.Printf("[Enricher] Erro ao atualizar Meilisearch: %v\n", err)
+			delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+			msg.NakWithDelay(delay)
+			return
 		}
 
-		// Atualiza SOMENTE os dados enriquecidos no PostgreSQL (sem tocar nos dados existentes)
 		if err := repo.UpdateEnrichedData(context.Background(), job.InviteCode, inviteInfo.Guild.Name, inviteInfo.Guild.ID, iconURL, inviteInfo.ApproximateMemberCount); err != nil {
 			fmt.Printf("[Enricher] Erro ao atualizar PostgreSQL: %v\n", err)
+			delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+			msg.NakWithDelay(delay)
+			return
 		}
 
+		rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
 		msg.Ack()
-	}, nats.Durable("discord-enricher"), nats.DeliverAll())
+	}, nats.Durable("discord-enricher"), nats.DeliverAll(), nats.ManualAck())
 
 	if err != nil {
 		log.Fatalf("Erro ao iniciar Discord Enricher: %v", err)
 	}
-	defer subEnrich.Unsubscribe()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+
+	fmt.Println("\nSinal recebido. Drenando conexões NATS para Graceful Shutdown...")
+
+	err = subFast.Drain()
+	if err != nil {
+		fmt.Printf("Erro ao drenar Fast Ingestion: %v\n", err)
+	}
+
+	err = subEnrich.Drain()
+	if err != nil {
+		fmt.Printf("Erro ao drenar Discord Enricher: %v\n", err)
+	}
+
+	// Drain é assíncrono ou síncrono dependendo do uso; nas versões recentes Wait() é necessário ou Time Sleep de garantia
+	// Mas como nc.Close() também aguarda/interrompe o resto, isso é suficiente.
+	time.Sleep(1 * time.Second)
+	fmt.Println("Parser Service encerrado gracefully.")
 }

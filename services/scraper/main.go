@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,9 +33,15 @@ func NewDeduplicator(address, password string, db int) *Deduplicator {
 	return &Deduplicator{rdb: rdb}
 }
 
-func (d *Deduplicator) MarkAsSeen(ctx context.Context, videoID string) error {
-	key := fmt.Sprintf("argus:seen:%s", videoID)
-	_, err := d.rdb.Set(ctx, key, "1", 7*24*60*60*1e9).Result() // 7 dias TTL
+func (d *Deduplicator) CheckIfProcessed(ctx context.Context, jobID string) (bool, error) {
+	key := fmt.Sprintf("argus:processed_job:%s", jobID)
+	exists, err := d.rdb.Exists(ctx, key).Result()
+	return exists > 0, err
+}
+
+func (d *Deduplicator) MarkAsSeen(ctx context.Context, jobID string) error {
+	key := fmt.Sprintf("argus:processed_job:%s", jobID)
+	_, err := d.rdb.Set(ctx, key, "1", 7*24*60*60*time.Second).Result() // 7 dias TTL
 	return err
 }
 
@@ -103,7 +111,6 @@ func main() {
 	log.Printf("⚠️  Se captcha aparecer, resolva via VNC (monitor em %s)", debugPort)
 
 	// --- Subscriber ---
-	// Para balancear a carga entre os workers, todos devem usar o mesmo nome "durable"
 	// Extendemos o AckWait para 10 minutos para evitar redelivery no meio do scraping de vídeos muito longos
 	sub, err := js.PullSubscribe("jobs.scrape", "scraper-worker-group", nats.AckWait(10*time.Minute))
 	if err != nil {
@@ -111,7 +118,7 @@ func main() {
 	}
 	defer sub.Unsubscribe()
 
-	log.Printf("Scraper Worker %s rodando! Consumindo jobs.scrape sequencialmente...", workerIDStr)
+	log.Printf("Scraper Worker %s rodando! Consumindo jobs.scrape...", workerIDStr)
 
 	// Aguarda sinal de parada
 	ctx, cancel := context.WithCancel(context.Background())
@@ -121,21 +128,25 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
-		fmt.Println("\nSinal recebido. Encerrando Scraper Worker...")
+		fmt.Println("\nSinal recebido. Encerrando Scraper Worker (Aguardando rotinas atuais)...")
 		cancel()
 	}()
 
+	sem := make(chan struct{}, 5) // Max 5 browsers simultâneos
+	var wg sync.WaitGroup
+
+loop:
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			break loop
 		default:
 		}
 
-		msgs, err := sub.Fetch(1, nats.MaxWait(10*time.Second))
+		msgs, err := sub.Fetch(1, nats.MaxWait(5*time.Second))
 		if err != nil {
-			if err == nats.ErrTimeout {
-				continue // Nenhuma mensagem na fila
+			if err == nats.ErrTimeout || err == nats.ErrConnectionClosed || err == nats.ErrBadSubscription {
+				continue // Nenhuma mensagem na fila ou dreno iniciando
 			}
 			log.Printf("[Worker %s] Erro no Fetch: %v", workerIDStr, err)
 			time.Sleep(2 * time.Second)
@@ -143,62 +154,114 @@ func main() {
 		}
 
 		msg := msgs[0]
-		var job worker.ScrapeJob
-		if err := json.Unmarshal(msg.Data, &job); err != nil {
-			log.Printf("[Worker %s] ❌ erro unmarshal job: %v", workerIDStr, err)
-			msg.Nak()
-			continue
-		}
 
-		log.Printf("[Worker %s] 📥 Recebido job: %s (%s)", workerIDStr, job.VideoID, job.Hashtag)
+		sem <- struct{}{}
+		wg.Add(1)
 
-		// Processa o vídeo
-		payload, err := worker.ProcessVideo(browser, job)
-		if err != nil {
-			log.Printf("[Worker %s] ❌ erro processando %s: %v", workerIDStr, job.VideoID, err)
-			// Devolve para a fila em caso de erro no processamento
-			msg.Nak()
-			continue
-		}
+		go func(m *nats.Msg) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		// Se não capturou nenhum comentário, skip e segue para o próximo
-		if payload.Metadata != nil {
-			if comments, ok := payload.Metadata["comments"]; ok {
-				if arr, ok := comments.([]interface{}); ok && len(arr) == 0 {
-					log.Printf("[Worker %s] ⏩ skip (0 comentários): %s", workerIDStr, job.VideoID)
-					msg.Ack()
-					continue
+			meta, err := m.Metadata()
+			if err != nil {
+				log.Printf("[Worker %s] ❌ Erro lendo metadata: %v", workerIDStr, err)
+				m.Ack()
+				return
+			}
+
+			var job worker.ScrapeJob
+			if err := json.Unmarshal(m.Data, &job); err != nil {
+				log.Printf("[Worker %s] ❌ erro unmarshal job: %v", workerIDStr, err)
+				m.Ack() // Ack porque falha de parse não resolve com retry
+				return
+			}
+
+			log.Printf("[Worker %s] 📥 Recebido job: %s (%s) [Tentativa: %d]", workerIDStr, job.VideoID, job.Hashtag, meta.NumDelivered)
+
+			// 1. Padrão de Idempotência
+			processed, err := dedup.CheckIfProcessed(ctx, job.VideoID)
+			if err == nil && processed {
+				log.Printf("[Worker %s] Mensagem duplicada ignorada: %s", workerIDStr, job.VideoID)
+				m.Ack()
+				return
+			}
+
+			// 3. Dead Letter Queue (DLQ)
+			if meta.NumDelivered > 5 {
+				log.Printf("[Worker %s] 🚨 Max Retries atingido para %s. Enviando para DLQ...", workerIDStr, job.VideoID)
+				dlqPayload := map[string]interface{}{
+					"error": "Max retries exceeded",
+					"job":   job,
+					"metadata": map[string]interface{}{
+						"num_delivered": meta.NumDelivered,
+						"timestamp":     time.Now(),
+					},
+				}
+				dlqData, _ := json.Marshal(dlqPayload)
+				if _, err := js.Publish("argus.dlq.scraper", dlqData); err != nil {
+					log.Printf("[Worker %s] ❌ erro publicando DLQ: %v", workerIDStr, err)
+					m.NakWithDelay(1 * time.Minute)
+					return
+				}
+				m.Ack()
+				return
+			}
+
+			// Processa o vídeo
+			payload, err := worker.ProcessVideo(browser, job)
+			if err != nil {
+				log.Printf("[Worker %s] ❌ erro processando %s: %v", workerIDStr, job.VideoID, err)
+				// 2. Exponential Backoff Nak
+				delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+				log.Printf("[Worker %s] ⏳ Nak no job %s com delay de %v", workerIDStr, job.VideoID, delay)
+				m.NakWithDelay(delay)
+				return
+			}
+
+			// Se não capturou nenhum comentário, skip e segue para o próximo
+			if payload.Metadata != nil {
+				if comments, ok := payload.Metadata["comments"]; ok {
+					if arr, ok := comments.([]interface{}); ok && len(arr) == 0 {
+						log.Printf("[Worker %s] ⏩ skip (0 comentários): %s", workerIDStr, job.VideoID)
+						m.Ack()
+						return
+					}
 				}
 			}
-		}
 
-		// Publica o resultado no tópico data.text_extracted
-		data, err := json.Marshal(payload)
-		if err != nil {
-			log.Printf("[Worker %s] ❌ erro marshal payload %s: %v", workerIDStr, job.VideoID, err)
-			msg.Nak()
-			continue
-		}
+			// Publica o resultado no tópico data.text_extracted
+			data, err := json.Marshal(payload)
+			if err != nil {
+				log.Printf("[Worker %s] ❌ erro marshal payload %s: %v", workerIDStr, job.VideoID, err)
+				delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+				m.NakWithDelay(delay)
+				return
+			}
 
-		_, err = js.Publish("data.text_extracted", data)
-		if err != nil {
-			log.Printf("[Worker %s] ❌ erro publicar resultado %s: %v", workerIDStr, job.VideoID, err)
-			// Devolve para a fila usando Nak
-			msg.Nak()
-			continue
-		}
+			_, err = js.Publish("data.text_extracted", data)
+			if err != nil {
+				log.Printf("[Worker %s] ❌ erro publicar resultado %s: %v", workerIDStr, job.VideoID, err)
+				delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+				m.NakWithDelay(delay)
+				return
+			}
 
-		log.Printf("[Worker %s] ✅ Publicado: %s → data.text_extracted", workerIDStr, job.VideoID)
+			log.Printf("[Worker %s] ✅ Publicado: %s → data.text_extracted", workerIDStr, job.VideoID)
 
-		// Só marca como visto DEPOIS do publish com sucesso
-		if err := dedup.MarkAsSeen(ctx, job.VideoID); err != nil {
-			log.Printf("[Worker %s] ⚠️  erro redis MarkAsSeen %s: %v", workerIDStr, job.VideoID, err)
-		}
+			// Só marca como visto DEPOIS do publish com sucesso (Idempotência final)
+			if err := dedup.MarkAsSeen(ctx, job.VideoID); err != nil {
+				log.Printf("[Worker %s] ⚠️  erro redis MarkAsSeen %s: %v", workerIDStr, job.VideoID, err)
+			}
 
-		// Ack → confirma processamento bem-sucedido
-		msg.Ack()
+			// Ack → confirma processamento bem-sucedido
+			m.Ack()
 
-		// Delay anti-rate-limit entre jobs (3-8 segundos)
-		worker.RandomDelay(3, 8)
+			// Delay anti-rate-limit entre jobs (3-8 segundos) para não estressar logo após
+			worker.RandomDelay(3, 8)
+		}(msg)
 	}
+
+	fmt.Println("[Worker] Aguardando término das rotinas ativas...")
+	wg.Wait()
+	fmt.Println("[Worker] Scraper Worker encerrado gracefully.")
 }
