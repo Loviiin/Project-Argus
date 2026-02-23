@@ -9,12 +9,12 @@ import (
 
 // SearchDoc define a estrutura do documento no Meilisearch
 type SearchDoc struct {
-	ID         string `json:"id"`
-	ServerName string `json:"server_name"`
-	InviteCode string `json:"invite_code"`
-	SourceURL  string `json:"source_url"`
-	Timestamp  int64  `json:"timestamp"`
-	Icon       string `json:"icon,omitempty"`
+	InviteCode         string `json:"invite_code"`
+	ServerName         string `json:"server_name"`
+	SourceURL          string `json:"source_url"`
+	TimestampFormatted string `json:"timestamp_formatted,omitempty"`
+	MemberCount        int    `json:"member_count"`
+	Icon               string `json:"icon,omitempty"`
 }
 
 // Indexer é a struct que guarda a conexão aberta
@@ -29,7 +29,7 @@ func NewIndexer(host, apiKey, indexName string) *Indexer {
 
 	_, err := client.CreateIndex(&meilisearch.IndexConfig{
 		Uid:        indexName,
-		PrimaryKey: "id",
+		PrimaryKey: "invite_code", // Alterado de "id" para "invite_code" para garantir o Upsert e não duplicar dados
 	})
 	if err != nil {
 		log.Printf("Aviso Meilisearch: %v", err)
@@ -41,6 +41,13 @@ func NewIndexer(host, apiKey, indexName string) *Indexer {
 		"source_url",
 	})
 
+	client.Index(indexName).UpdateSortableAttributes(&[]string{
+		"member_count",
+	})
+
+	filterableAttrs := []interface{}{"member_count"}
+	client.Index(indexName).UpdateFilterableAttributes(&filterableAttrs)
+
 	fmt.Println("Conectado ao Meilisearch!")
 
 	return &Indexer{
@@ -49,13 +56,37 @@ func NewIndexer(host, apiKey, indexName string) *Indexer {
 	}
 }
 
-// IndexData recebe o documento pronto e envia
-func (i *Indexer) IndexData(doc SearchDoc) error {
-	task, err := i.client.Index(i.indexName).AddDocuments([]SearchDoc{doc}, nil)
+// IndexData recebe o documento pronto e atualiza o index parcialmente
+func (i *Indexer) IndexData(doc map[string]interface{}) error {
+	pk := "invite_code"
+	task, err := i.client.Index(i.indexName).UpdateDocuments([]map[string]interface{}{doc}, &meilisearch.DocumentOptions{PrimaryKey: &pk})
 	if err != nil {
 		return fmt.Errorf("erro ao indexar documento: %w", err)
 	}
 
-	fmt.Printf("Enviado para Meilisearch (Task UID: %d)\n", task.TaskUID)
+	fmt.Printf("Enviado para Meilisearch (Task UID: %d) via Upsert Parcial (PK: %s)\n", task.TaskUID, doc["invite_code"])
 	return nil
+}
+
+// UpdateData realiza um Partial Update. Usamos map[string]interface{} para evitar
+// que zero-values (strings vazias, 0) de uma struct sobrescrevam os dados originais no banco.
+func (i *Indexer) UpdateData(doc map[string]interface{}) error {
+	pk := "invite_code"
+	task, err := i.client.Index(i.indexName).UpdateDocuments([]map[string]interface{}{doc}, &meilisearch.DocumentOptions{PrimaryKey: &pk})
+	if err != nil {
+		return fmt.Errorf("erro ao atualizar documento: %w", err)
+	}
+
+	fmt.Printf("Atualizado no Meilisearch (Task UID: %d) via Partial Update (PK: %v)\n", task.TaskUID, doc["invite_code"])
+	return nil
+}
+
+// GetDocument busca um documento específico no Meilisearch
+func (i *Indexer) GetDocument(pk string) (*SearchDoc, error) {
+	var doc SearchDoc
+	err := i.client.Index(i.indexName).GetDocument(pk, &meilisearch.DocumentQuery{}, &doc)
+	if err != nil {
+		return nil, err
+	}
+	return &doc, nil
 }

@@ -51,25 +51,37 @@ func main() {
 	}
 
 	js, _ := nc.JetStream()
-	fmt.Println("Parser Service (Go) iniciado. Aguardando textos...")
+
+	// Garantir que o stream de enrich exista
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name:     "ENRICH",
+		Subjects: []string{"jobs.enrich.>"},
+		Storage:  nats.FileStorage,
+	})
+	if err != nil {
+		fmt.Printf("Stream ENRICH check: %v\n", err)
+	}
+
+	fmt.Println("Parser Service Iniciado. Rodando Fast Ingestion Flow & Discord Enricher Flow...")
 
 	finder := logic.NewDiscordFinder()
-	discordClient := client.NewDiscordClient(cfg.Discord.Token, rdb)
-	sub, err := js.Subscribe("data.text_extracted", func(msg *nats.Msg) {
+	discordClient := client.NewDiscordClient(cfg.Discord.FetchMode, cfg.Discord.ProxyURL, cfg.Discord.Token, rdb)
 
+	// ==========================================
+	// 1. FAST INGESTION FLOW
+	// ==========================================
+	subFast, err := js.Subscribe("data.text_extracted", func(msg *nats.Msg) {
 		var payload dto.OcrMessage
 		if err := json.Unmarshal(msg.Data, &payload); err != nil {
-			log.Printf("Erro decodificando JSON: %v", err)
+			log.Printf("[Fast Ingestion] Erro decodificando JSON: %v", err)
 			msg.Ack()
 			return
 		}
 
-		fmt.Printf("Analisando texto de: %s\n", payload.SourcePath)
-
 		invites := finder.FindInvites(payload.TextContent)
-
 		if len(invites) > 0 {
-			fmt.Printf("Convites encontrados: %v\n", invites)
+			// Dedup em memória rápida para não mandar enriquecer 2x o mesmo link no mesmo video
+			seen := make(map[string]bool)
 
 			for _, inviteLink := range invites {
 				var inviteCode string
@@ -81,70 +93,129 @@ func main() {
 					continue
 				}
 
-				inviteInfo, err := discordClient.GetInviteInfo(context.Background(), inviteCode)
-				if err != nil {
-					fmt.Printf("Erro consultando %s: %v\n", inviteLink, err)
+				if seen[inviteCode] {
 					continue
 				}
+				seen[inviteCode] = true
 
-				fmt.Printf("%s → Guild: %s (ID: %s) | Membros: ~%d\n",
-					inviteLink, inviteInfo.Guild.Name, inviteInfo.Guild.ID, inviteInfo.ApproximateMemberCount)
+				fmt.Printf("[Fast Ingestion] Encontrado: %s\n", inviteCode)
 
-				fmt.Printf("Salvando '%s' no banco...\n", inviteInfo.Guild.Name)
-
+				// Salva bruto no banco (se falhar ignora para não travar o loop)
 				author := payload.AuthorID
 				if author == "" {
 					author = "desconhecido"
 				}
 
 				artifact := repository.Artifact{
-					SourceURL:          payload.SourcePath,
-					AuthorID:           author,
-					DiscordInviteCode:  inviteCode,
-					DiscordServerName:  inviteInfo.Guild.Name,
-					DiscordServerID:    inviteInfo.Guild.ID,
-					DiscordMemberCount: inviteInfo.ApproximateMemberCount,
-					RawOcrText:         payload.TextContent,
-					RiskScore:          0,
+					SourceURL:         payload.SourcePath,
+					AuthorID:          author,
+					DiscordInviteCode: inviteCode,
+					RawOcrText:        payload.TextContent,
+					RiskScore:         0,
 				}
+				repo.Save(context.Background(), artifact)
 
-				artifactID, err := repo.Save(context.Background(), artifact)
+				// Upsert imediato e BRUTO no Meilisearch
+				err := indexer.IndexData(map[string]interface{}{
+					"invite_code":         inviteCode,
+					"source_url":          payload.SourcePath,
+					"timestamp_formatted": time.Now().Format("02/01/2006 15:04:05"),
+				})
 				if err != nil {
-					fmt.Printf("Erro ao salvar no DB: %v\n", err)
-				} else {
-					fmt.Printf("Salvo com sucesso (ID: %s). Indexando...\n", artifactID)
-
-					var iconURL string
-					if inviteInfo.Guild.Icon != "" {
-						iconURL = fmt.Sprintf("https://cdn.discordapp.com/icons/%s/%s.png", inviteInfo.Guild.ID, inviteInfo.Guild.Icon)
-					}
-
-					err := indexer.IndexData(search.SearchDoc{
-						ID:         artifactID,
-						ServerName: artifact.DiscordServerName,
-						InviteCode: artifact.DiscordInviteCode,
-						SourceURL:  artifact.SourceURL,
-						Timestamp:  time.Now().Unix(),
-						Icon:       iconURL,
-					})
-
-					if err != nil {
-						fmt.Printf("Falha na indexação: %v\n", err)
-					}
+					fmt.Printf("[Fast Ingestion] Falha na indexação bruta: %v\n", err)
 				}
+
+				// Publica no tópico de Enrich (Assíncrono)
+				enrichJob, _ := json.Marshal(dto.DiscordEnrichJob{InviteCode: inviteCode})
+				js.Publish("jobs.enrich.discord", enrichJob)
 			}
-		} else {
-			fmt.Printf("Nenhum convite encontrado.\n")
 		}
 
 		msg.Ack()
-	}, nats.Durable("parser-consumer"), nats.DeliverAll(), nats.InactiveThreshold(30*time.Second))
+	}, nats.Durable("parser-fast-ingestion"), nats.DeliverAll(), nats.InactiveThreshold(30*time.Second))
 
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Erro ao iniciar Fast Ingestion: %v", err)
 	}
+	defer subFast.Unsubscribe()
 
-	fmt.Print(sub)
+	// ==========================================
+	// 2. DISCORD ENRICHER FLOW
+	// ==========================================
+	subEnrich, err := js.Subscribe("jobs.enrich.discord", func(msg *nats.Msg) {
+		var job dto.DiscordEnrichJob
+		if err := json.Unmarshal(msg.Data, &job); err != nil {
+			log.Printf("[Enricher] Erro decodificando Job: %v", err)
+			msg.Ack()
+			return
+		}
+
+		fmt.Printf("[Enricher] Processando: %s\n", job.InviteCode)
+
+		// 1. Checa no Meilisearch SE o registro já NÃO tem os campos enriquecidos:
+		if existingDoc, err := indexer.GetDocument(job.InviteCode); err == nil {
+			if existingDoc.ServerName != "" && existingDoc.Icon != "" {
+				// Já foi enriquecido previamente! Podemos poupar a API do Discord e ignorar:
+				fmt.Printf("[Enricher] ⏭️ Skiped: %s já enriquecido (%s). Poupando a API.\n", job.InviteCode, existingDoc.ServerName)
+				msg.Ack()
+				return
+			}
+		}
+
+		// Chama a API do Discord (ou Redis cache).
+		// Se bater Rate Limit (429), erro vai ser "rate limited".
+		inviteInfo, err := discordClient.GetInviteInfo(context.Background(), job.InviteCode)
+		if err != nil {
+			if strings.Contains(err.Error(), "rate limited") {
+				// Devolve pra fila com um delay maior pra mandar pro "final da fila"
+				// O rate limit do Discord bloqueia o IP momentaneamente.
+				msg.NakWithDelay(1 * time.Minute)
+				return
+			}
+			if strings.Contains(err.Error(), "inválido ou expirado") {
+				// Erro permanente, descarta
+				fmt.Printf("[Enricher] %s expirado/inválido. Descartando.\n", job.InviteCode)
+				msg.Ack()
+				return
+			}
+
+			// Outros erros
+			fmt.Printf("[Enricher] Erro inesperado %s: %v\n", job.InviteCode, err)
+			msg.NakWithDelay(1 * time.Minute)
+			return
+		}
+
+		fmt.Printf("[Enricher] Dados Sucesso: %s → %s | Membros: %d\n",
+			job.InviteCode, inviteInfo.Guild.Name, inviteInfo.ApproximateMemberCount)
+
+		// Parial Update no Meilisearch com os dados ricos
+		var iconURL string
+		if inviteInfo.Guild.Icon != "" {
+			iconURL = fmt.Sprintf("https://cdn.discordapp.com/icons/%s/%s.png", inviteInfo.Guild.ID, inviteInfo.Guild.Icon)
+		}
+
+		err = indexer.UpdateData(map[string]interface{}{
+			"invite_code":  job.InviteCode,
+			"server_name":  inviteInfo.Guild.Name,
+			"icon":         iconURL,
+			"member_count": inviteInfo.ApproximateMemberCount,
+		})
+		if err != nil {
+			fmt.Printf("[Enricher] Erro ao atualizar Meilisearch: %v\n", err)
+		}
+
+		// Atualiza SOMENTE os dados enriquecidos no PostgreSQL (sem tocar nos dados existentes)
+		if err := repo.UpdateEnrichedData(context.Background(), job.InviteCode, inviteInfo.Guild.Name, inviteInfo.Guild.ID, iconURL, inviteInfo.ApproximateMemberCount); err != nil {
+			fmt.Printf("[Enricher] Erro ao atualizar PostgreSQL: %v\n", err)
+		}
+
+		msg.Ack()
+	}, nats.Durable("discord-enricher"), nats.DeliverAll())
+
+	if err != nil {
+		log.Fatalf("Erro ao iniciar Discord Enricher: %v", err)
+	}
+	defer subEnrich.Unsubscribe()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

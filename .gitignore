@@ -25,9 +25,15 @@ tmp_data/*
 *.log
 *.out
 
+# --- Binaries ---
+*_bin
+*.exe
+
+# --- Build ---
+go.work.sum
+
 # --- Browser State (Rod/Chromium sessions) ---
-browser_state_discovery/
-browser_state_worker/
+browser_state_*/
 
 # --- IDE & OS ---
 .vscode/*

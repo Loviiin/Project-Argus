@@ -71,6 +71,21 @@ func (r *ArtifactRepository) Save(ctx context.Context, a Artifact) (string, erro
 	return id, err
 }
 
+// UpdateEnrichedData atualiza SOMENTE os dados enriquecidos do Discord,
+// sem tocar nos campos que já existem (source_url, raw_ocr_text, etc).
+func (r *ArtifactRepository) UpdateEnrichedData(ctx context.Context, inviteCode, serverName, serverID, icon string, memberCount int) error {
+	query := `
+		UPDATE artifacts 
+		SET discord_server_name = $2,
+		    discord_server_id = $3,
+		    discord_icon = $4,
+		    discord_member_count = $5
+		WHERE discord_invite_code = $1
+	`
+	_, err := r.db.Exec(ctx, query, inviteCode, serverName, serverID, icon, memberCount)
+	return err
+}
+
 func (r *ArtifactRepository) Close(ctx context.Context) {
 	r.db.Close(ctx)
 }

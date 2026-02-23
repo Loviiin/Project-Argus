@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	fetchTimeout = 90 * time.Second
+	fetchTimeout = 20000 * time.Second
 )
 
 // Source é o scraper de discovery do TikTok.
@@ -26,7 +26,7 @@ type Source struct {
 	dedup   *repository.Deduplicator
 }
 
-const maxVideos = 15
+const maxVideos = 150
 
 // NewSource cria uma nova instância do TikTok discovery source.
 // O browser persiste sessão em ./browser_state_discovery para manter cookies/tokens
