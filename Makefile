@@ -94,6 +94,9 @@ run-worker-6: ## Roda o Scraper Worker 6
 run-vision:
 	cd services/vision && ./.venv/bin/python src/main.py
 
+train-vision: ## Treina o modelo ML do Captcha de Rotação
+	cd services/vision && ./.venv/bin/python scripts/train.py
+
 run-captcha-solver:
 	cd services/vision && ./.venv/bin/python -m src.captcha_solver
 
@@ -175,4 +178,8 @@ help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-22s %s\n", $$1, $$2}'
 
 vnc:
+	@echo "♻️  Reiniciando VNC..."
+	-@pkill -f start-vnc.sh 2>/dev/null || true
+	-@pkill -f Xvfb 2>/dev/null || true
+	-@pkill -f x11vnc 2>/dev/null || true
 	@bash /usr/local/bin/start-vnc.sh

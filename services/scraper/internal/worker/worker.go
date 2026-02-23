@@ -12,6 +12,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
+	"github.com/loviiin/project-argus/pkg/captcha"
 )
 
 // ScrapeJob é o payload recebido do tópico NATS jobs.scrape.
@@ -128,9 +129,9 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 
 	// Verifica captcha
 	if isCaptchaPresent(page) {
-		fmt.Println("[Worker] ⚠️  Captcha detectado! Resolva manualmente via VNC...")
-		if err := waitCaptchaResolution(page, 5*time.Minute); err != nil {
-			return nil, fmt.Errorf("captcha não resolvido: %w", err)
+		fmt.Println("[Worker] ⚠️  Captcha detectado! Iniciando Shadow Collector...")
+		if err := captcha.RunShadowCollector(page, "../../discovery/dataset/rotation_captcha", "scraper"); err != nil {
+			return nil, fmt.Errorf("shadow collector abortou a extração: %w", err)
 		}
 		page.Timeout(10 * time.Second).WaitLoad()
 		time.Sleep(3 * time.Second)

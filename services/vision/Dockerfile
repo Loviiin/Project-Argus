@@ -15,7 +15,8 @@ WORKDIR /app
 # Copia requirements
 COPY requirements.txt .
 
-# Instala dependências Python
+# Instala dependências Python (PyTorch CPU e outras)
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia código fonte

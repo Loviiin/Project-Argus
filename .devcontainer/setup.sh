@@ -5,6 +5,7 @@ echo "Instalando dependências do sistema..."
 echo "Configurando Vision (Python)..."
 cd services/vision
 pip install --upgrade pip
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 cd ../..
 
