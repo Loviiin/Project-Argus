@@ -147,7 +147,7 @@ func main() {
 					RiskScore:         0,
 				}
 
-				if err := repo.Save(context.Background(), artifact); err != nil {
+				if _, err := repo.Save(context.Background(), artifact); err != nil {
 					fmt.Printf("[Fast Ingestion] Erro BD: %v\n", err)
 					delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
 					msg.NakWithDelay(delay)
