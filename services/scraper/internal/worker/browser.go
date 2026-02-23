@@ -10,7 +10,7 @@ import (
 // NewBrowser cria uma instância de browser Rod com estado persistente.
 // O UserDataDir garante que cookies, localStorage e tokens de segurança
 // sejam mantidos entre execuções, evitando captchas repetidos.
-func NewBrowser(stateDir string) (*rod.Browser, error) {
+func NewBrowser(stateDir string, debugPort string) (*rod.Browser, error) {
 	path, _ := launcher.LookPath()
 
 	l := launcher.New().
@@ -32,7 +32,10 @@ func NewBrowser(stateDir string) (*rod.Browser, error) {
 	browser := rod.New().ControlURL(u).MustConnect()
 
 	// Monitor para debug remoto
-	go browser.ServeMonitor(":9223")
+	go browser.ServeMonitor(debugPort)
 
+	// O Scraper Worker precisa iniciar com uma página Stealth já configurada
+	// para que as abas subsequentes herdem isso ou a primeira aba já navegue mascarada.
+	// O stealth é aplicado por página.
 	return browser, nil
 }

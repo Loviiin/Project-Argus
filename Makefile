@@ -31,6 +31,11 @@ up: ## Sobe a infraestrutura (Docker)
 down: ## Derruba a infraestrutura
 	docker-compose down
 
+clean-data: ## Apaga todos os volumes (DB, Redis, NATS, Meili) e recria a infra limpa
+	docker-compose down -v
+	docker-compose up -d
+	@echo "🧹 Ambiente limpo e reiniciado com sucesso!"
+
 logs: ## Mostra os logs da infraestrutura
 	docker-compose logs -f
 
@@ -53,15 +58,9 @@ setup-scraper:
 
 
 setup-python:
-<<<<<<< Updated upstream
-	@echo "Instalando deps do Vision (Python)..."
-	cd services/vision && pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-	cd services/vision && pip3 install -r requirements.txt
-=======
 	cd services/vision && python3 -m venv .venv
 	cd services/vision && ./.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 	cd services/vision && ./.venv/bin/pip install -r requirements.txt
->>>>>>> Stashed changes
 
 # --- Run Services ---
 
@@ -73,6 +72,24 @@ run-discovery: ## Roda o serviço Discovery (Publisher)
 
 run-scraper: ## Roda o Scraper Worker (Subscriber)
 	cd services/scraper && go run main.go
+
+run-worker-1: ## Roda o Scraper Worker 1
+	cd services/scraper && WORKER_ID=1 go run main.go
+
+run-worker-2: ## Roda o Scraper Worker 2
+	cd services/scraper && WORKER_ID=2 go run main.go
+
+run-worker-3: ## Roda o Scraper Worker 3
+	cd services/scraper && WORKER_ID=3 go run main.go
+
+run-worker-4: ## Roda o Scraper Worker 4
+	cd services/scraper && WORKER_ID=4 go run main.go
+
+run-worker-5: ## Roda o Scraper Worker 5
+	cd services/scraper && WORKER_ID=5 go run main.go
+
+run-worker-6: ## Roda o Scraper Worker 6
+	cd services/scraper && WORKER_ID=6 go run main.go
 
 run-vision:
 	cd services/vision && ./.venv/bin/python src/main.py
@@ -103,24 +120,11 @@ nats-test:
 test-captcha:
 	@./scripts/test-captcha.sh
 
-<<<<<<< Updated upstream
-test-captcha-full: ## Teste completo: NATS + Vision + Discovery (manual)
-	@echo "🧪 Teste Completo de Captcha"
-	@echo "================================"
-	@echo ""
-	@echo "1️⃣  Verificando NATS..."
-	@docker ps | grep nats > /dev/null || (echo "❌ NATS não está rodando. Execute: make up" && exit 1)
-	@echo "✅ NATS rodando"
-	@echo ""
-	@echo "2️⃣  Iniciando Vision Service (background)..."
-	@cd services/vision && NATS_URL=nats://localhost:4222 python3 -m src.captcha_solver > /tmp/vision.log 2>&1 & echo $$! > /tmp/vision.pid
-=======
 test-captcha-full:
 	@echo "Checking NATS..."
 	@docker ps | grep nats > /dev/null || (echo "NATS not running. Run: make up" && exit 1)
 	@echo "NATS OK"
 	@cd services/vision && NATS_URL=nats://localhost:4222 ./.venv/bin/python -m src.captcha_solver > /tmp/vision.log 2>&1 & echo $$! > /tmp/vision.pid
->>>>>>> Stashed changes
 	@sleep 2
 	@echo "✅ Vision Service iniciado (PID: $$(cat /tmp/vision.pid))"
 	@echo ""

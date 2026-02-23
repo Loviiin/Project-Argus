@@ -46,7 +46,10 @@ type TikTokAPIResponse struct {
 	} `json:"comments"`
 }
 
-const perVideoTimeout = 20 * time.Second
+const (
+	perVideoTimeout     = 20 * time.Second
+	MaxCommentsPerVideo = 100 // Limita o numero maximo de comentários para não travar em vídeos virais
+)
 
 // ProcessVideo abre a página de um vídeo, intercepta a API de comentários,
 // extrai dados e retorna o payload para publicação.
@@ -72,6 +75,9 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 		if err := json.Unmarshal(body, &resp); err == nil {
 			mu.Lock()
 			for _, c := range resp.Comments {
+				if len(capturedComments) >= MaxCommentsPerVideo {
+					break
+				}
 				capturedComments = append(capturedComments, RawComment{
 					Nick: c.User.UniqueId,
 					Text: strings.ReplaceAll(c.Text, "\n", " "),
@@ -91,6 +97,9 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 		if err := json.Unmarshal(body, &resp); err == nil {
 			mu.Lock()
 			for _, c := range resp.Comments {
+				if len(capturedComments) >= MaxCommentsPerVideo {
+					break
+				}
 				capturedComments = append(capturedComments, RawComment{
 					Nick: c.User.UniqueId,
 					Text: "[reply] " + strings.ReplaceAll(c.Text, "\n", " "),
@@ -165,6 +174,15 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 
 	// Scroll no painel de comentários e clica em replies
 	for pass := 0; pass < passes; pass++ {
+		mu.Lock()
+		currentLen := len(capturedComments)
+		mu.Unlock()
+
+		if currentLen >= MaxCommentsPerVideo {
+			fmt.Printf("[Worker] 🛑 Limite de %d comentários atingido. Interrompendo scroll...\n", MaxCommentsPerVideo)
+			break
+		}
+
 		time.Sleep(1500 * time.Millisecond)
 		page.Eval(`() => {
 			const panel = document.querySelector(

@@ -2,7 +2,9 @@ app:
   env: "local"
 
 discord:
-  token: "your_token_here" # optional; leave empty for anonymous
+  fetch_mode: "scraper"
+  token: "your_token_here"
+  proxy: "" # optional, e.g. "http://user:pass@ip:port"
 
 database:
   url: "postgres://your_user:postgres_password@127.0.0.1:5432/argus-post-db?sslmode=disable"

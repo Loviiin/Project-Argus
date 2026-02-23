@@ -7,3 +7,8 @@ type OcrMessage struct {
 	SourceType  string                 `json:"source_type,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
+
+// DiscordEnrichJob é o payload para o tópico jobs.enrich.discord
+type DiscordEnrichJob struct {
+	InviteCode string `json:"invite_code"`
+}
