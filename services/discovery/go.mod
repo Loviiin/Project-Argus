@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/nats-io/nkeys v0.4.11 // indirect
@@ -30,3 +31,5 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/nats-io/nats.go v1.48.0
 )
+
+replace github.com/loviiin/project-argus/pkg => ../../pkg

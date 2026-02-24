@@ -145,6 +145,7 @@ func main() {
 					DiscordInviteCode: inviteCode,
 					RawOcrText:        payload.TextContent,
 					RiskScore:         0,
+					DiscordStatus:     "pending",
 				}
 
 				if _, err := repo.Save(context.Background(), artifact); err != nil {
@@ -158,6 +159,7 @@ func main() {
 					"invite_code":         inviteCode,
 					"source_url":          payload.SourcePath,
 					"timestamp_formatted": time.Now().Format("02/01/2006 15:04:05"),
+					"status":              "pending",
 				})
 				if err != nil {
 					fmt.Printf("[Fast Ingestion] Falha na indexação bruta: %v\n", err)
@@ -241,7 +243,15 @@ func main() {
 				return
 			}
 			if strings.Contains(errMsg, "inválido ou expirado") || strings.Contains(errMsg, "404") {
-				fmt.Printf("[Enricher] %s expirado/inválido. Descartando.\n", job.InviteCode)
+				fmt.Printf("[Enricher] %s expirado. Marcando como 'expired' nas bases.\n", job.InviteCode)
+
+				// Atualizar registro como expirado
+				indexer.UpdateData(map[string]interface{}{
+					"invite_code": job.InviteCode,
+					"status":      "expired",
+				})
+				repo.UpdateEnrichedData(context.Background(), job.InviteCode, "", "", "", 0, "expired")
+
 				rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
 				msg.Ack()
 				return
@@ -267,6 +277,7 @@ func main() {
 			"server_name":  inviteInfo.Guild.Name,
 			"icon":         iconURL,
 			"member_count": inviteInfo.ApproximateMemberCount,
+			"status":       "active",
 		})
 		if err != nil {
 			fmt.Printf("[Enricher] Erro ao atualizar Meilisearch: %v\n", err)
@@ -275,7 +286,7 @@ func main() {
 			return
 		}
 
-		if err := repo.UpdateEnrichedData(context.Background(), job.InviteCode, inviteInfo.Guild.Name, inviteInfo.Guild.ID, iconURL, inviteInfo.ApproximateMemberCount); err != nil {
+		if err := repo.UpdateEnrichedData(context.Background(), job.InviteCode, inviteInfo.Guild.Name, inviteInfo.Guild.ID, iconURL, inviteInfo.ApproximateMemberCount, "active"); err != nil {
 			fmt.Printf("[Enricher] Erro ao atualizar PostgreSQL: %v\n", err)
 			delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
 			msg.NakWithDelay(delay)

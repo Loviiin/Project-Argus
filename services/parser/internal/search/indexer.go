@@ -15,6 +15,7 @@ type SearchDoc struct {
 	TimestampFormatted string `json:"timestamp_formatted,omitempty"`
 	MemberCount        int    `json:"member_count"`
 	Icon               string `json:"icon,omitempty"`
+	Status             string `json:"status,omitempty"`
 }
 
 // Indexer é a struct que guarda a conexão aberta
@@ -39,13 +40,14 @@ func NewIndexer(host, apiKey, indexName string) *Indexer {
 		"server_name",
 		"invite_code",
 		"source_url",
+		"status",
 	})
 
 	client.Index(indexName).UpdateSortableAttributes(&[]string{
 		"member_count",
 	})
 
-	filterableAttrs := []interface{}{"member_count"}
+	filterableAttrs := []interface{}{"member_count", "status"}
 	client.Index(indexName).UpdateFilterableAttributes(&filterableAttrs)
 
 	fmt.Println("Conectado ao Meilisearch!")
