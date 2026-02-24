@@ -16,6 +16,7 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/utils"
 	"github.com/go-rod/stealth"
+	"github.com/loviiin/project-argus/pkg/config"
 )
 
 const (
@@ -56,9 +57,15 @@ func NewSource(dedup *repository.Deduplicator) *Source {
 	l := launcher.New().
 		UserDataDir(userDataDir). // Persiste sessão para hashtag pages
 		Leakless(false).
-		Headless(false).
 		NoSandbox(true).
 		Devtools(true)
+
+	cfg := config.LoadConfig()
+	if cfg.Browser.Headless {
+		l = l.Set("headless", "new") // Para produção (Evasão Anti-Bot)
+	} else {
+		l = l.Headless(false) // Para desenvolvimento/VNC (Permite ver a tela)
+	}
 
 	// Usa browser instalado no sistema se encontrar; senão go-rod baixa Chromium
 	if chromePath, found := launcher.LookPath(); found {
@@ -77,9 +84,14 @@ func NewSource(dedup *repository.Deduplicator) *Source {
 
 		l = launcher.New().
 			Leakless(false).
-			Headless(false).
 			NoSandbox(true).
 			Devtools(true)
+
+		if cfg.Browser.Headless {
+			l = l.Set("headless", "new") // Para produção (Evasão Anti-Bot)
+		} else {
+			l = l.Headless(false) // Para desenvolvimento/VNC (Permite ver a tela)
+		}
 
 		if chromePath, found := launcher.LookPath(); found {
 			l = l.Bin(chromePath)

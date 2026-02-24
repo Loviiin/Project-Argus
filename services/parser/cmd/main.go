@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"os/signal"
 	"strings"
@@ -93,6 +94,16 @@ func main() {
 		hashStr := hex.EncodeToString(hash[:])
 		idempotencyKey := fmt.Sprintf("argus:processed_job:fast_ingestion:%s", hashStr)
 
+		// 1. Worker Heartbeat/Processing Lock
+		lockKey := fmt.Sprintf("argus:processing_lock:fast_ingestion:%s", hashStr)
+		if locked, _ := rdb.SetNX(context.Background(), lockKey, "1", 10*time.Minute).Result(); !locked {
+			delay := time.Duration(30+rand.Intn(30)) * time.Second
+			log.Printf("[Fast Ingestion] Job %s bloqueado por lock. Nak + Jitter: %v", hashStr, delay)
+			msg.NakWithDelay(delay)
+			return
+		}
+		defer rdb.Del(context.Background(), lockKey)
+
 		exists, err := rdb.Exists(context.Background(), idempotencyKey).Result()
 		if err == nil && exists > 0 {
 			log.Printf("[Fast Ingestion] Mensagem duplicada ignorada: %s", hashStr)
@@ -100,7 +111,7 @@ func main() {
 			return
 		}
 
-		if meta.NumDelivered > 5 {
+		if meta.NumDelivered > 15 {
 			log.Printf("[Fast Ingestion] 🚨 Max Retries atingido para %s. Enviando para DLQ...", hashStr)
 			dlqData, _ := json.Marshal(map[string]interface{}{
 				"error":    "Max retries exceeded",
@@ -203,6 +214,17 @@ func main() {
 		}
 
 		idempotencyKey := fmt.Sprintf("argus:processed_job:%s", job.InviteCode)
+
+		// 1. Worker Heartbeat/Processing Lock
+		lockKey := fmt.Sprintf("argus:processing_lock:%s", job.InviteCode)
+		if locked, _ := rdb.SetNX(context.Background(), lockKey, "1", 10*time.Minute).Result(); !locked {
+			delay := time.Duration(30+rand.Intn(30)) * time.Second
+			log.Printf("[Enricher] Job %s bloqueado por lock. Nak + Jitter: %v", job.InviteCode, delay)
+			msg.NakWithDelay(delay)
+			return
+		}
+		defer rdb.Del(context.Background(), lockKey)
+
 		exists, err := rdb.Exists(context.Background(), idempotencyKey).Result()
 		if err == nil && exists > 0 {
 			log.Printf("[Enricher] Mensagem duplicada ignorada: %s", job.InviteCode)
@@ -210,7 +232,7 @@ func main() {
 			return
 		}
 
-		if meta.NumDelivered > 5 {
+		if meta.NumDelivered > 15 {
 			log.Printf("[Enricher] 🚨 Max Retries atingido para %s. Enviando para DLQ...", job.InviteCode)
 			dlqData, _ := json.Marshal(map[string]interface{}{
 				"error":    "Max retries exceeded",
@@ -237,9 +259,10 @@ func main() {
 		inviteInfo, err := discordClient.GetInviteInfo(context.Background(), job.InviteCode)
 		if err != nil {
 			errMsg := strings.ToLower(err.Error())
-			if strings.Contains(errMsg, "rate limited") || strings.Contains(errMsg, "429") {
-				fmt.Printf("[Enricher] Rate limited no Discord API para %s. Nak 1 min.\n", job.InviteCode)
-				msg.NakWithDelay(1 * time.Minute)
+			if strings.Contains(errMsg, "rate limited") || strings.Contains(errMsg, "429") || strings.Contains(errMsg, "circuit breaker") {
+				delay := 5*time.Minute + time.Duration(rand.Intn(60))*time.Second
+				fmt.Printf("[Enricher] Circuit Breaker / Rate limit para %s. Nak com Jitter: %v\n", job.InviteCode, delay)
+				msg.NakWithDelay(delay)
 				return
 			}
 			if strings.Contains(errMsg, "inválido ou expirado") || strings.Contains(errMsg, "404") {

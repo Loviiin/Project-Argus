@@ -1,6 +1,11 @@
 app:
   env: "local"
 
+browser:
+  # Se false, abre a janela do Chrome (Útil para VNC/Resolver Captcha).
+  # Se true, roda em background com --headless=new (Para produção autônoma).
+  headless: false
+
 discord:
   fetch_mode: "scraper"
   token: "your_token_here"

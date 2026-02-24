@@ -13,6 +13,10 @@ type Config struct {
 		Env string `yaml:"env"`
 	} `yaml:"app"`
 
+	Browser struct {
+		Headless bool `yaml:"headless"`
+	} `yaml:"browser"`
+
 	Discovery struct {
 		Hashtags []string `yaml:"hashtags"`
 		Interval int      `yaml:"interval_seconds"`
