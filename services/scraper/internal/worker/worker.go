@@ -12,6 +12,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
+	"github.com/loviiin/project-argus/pkg/captcha"
 )
 
 // ScrapeJob é o payload recebido do tópico NATS jobs.scrape.
@@ -126,11 +127,10 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 	}
 	time.Sleep(3 * time.Second)
 
-	// Verifica captcha
 	if isCaptchaPresent(page) {
-		fmt.Println("[Worker] ⚠️  Captcha detectado! Resolva manualmente via VNC...")
-		if err := waitCaptchaResolution(page, 5*time.Minute); err != nil {
-			return nil, fmt.Errorf("captcha não resolvido: %w", err)
+		fmt.Println("[Worker] Captcha detectado! Iniciando Shadow Collector...")
+		if err := captcha.RunShadowCollector(page, "../discovery/dataset/rotation_captcha", "scraper"); err != nil {
+			return nil, fmt.Errorf("shadow collector abortou a extração: %w", err)
 		}
 		page.Timeout(10 * time.Second).WaitLoad()
 		time.Sleep(3 * time.Second)
@@ -293,29 +293,32 @@ func isCaptchaPresent(page *rod.Page) bool {
 		urlStr = info.URL
 	}
 
-	if strings.Contains(strings.ToLower(urlStr), "verify") ||
-		strings.Contains(strings.ToLower(urlStr), "captcha") {
+	if strings.Contains(strings.ToLower(urlStr), "captcha") {
 		return true
 	}
 
-	if _, err := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"]`); err == nil {
+	if has, _, err := page.Has(`iframe[src*="captcha"]`); err == nil && has {
 		return true
 	}
 
-	for _, sel := range []string{
+	strictSelectors := []string{
 		".captcha_verify_container",
 		".captcha_verify_img_slide",
-		"[class*='captcha']",
 		"[class*='secsdk-captcha']",
 		"[id*='captcha']",
-		"div[class*='verify']",
-	} {
-		if _, err := page.Timeout(1 * time.Second).Element(sel); err == nil {
-			return true
-		}
+		"div[class*='captcha_verify']",
 	}
 
-	if _, err := page.Timeout(1*time.Second).ElementR("*", "(?i)(drag.*slider|fit.*puzzle|verify|captcha)"); err == nil {
+	if has, _, err := page.Has(strings.Join(strictSelectors, ", ")); err == nil && has {
+		return true
+	}
+
+	result, err := page.Eval(`() => {
+		const text = document.body.innerText.toLowerCase();
+		return text.includes('drag the slider') || text.includes('fit the puzzle') || text.includes('captcha');
+	}`)
+
+	if err == nil && result.Value.Bool() {
 		return true
 	}
 

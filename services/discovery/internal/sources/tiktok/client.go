@@ -3,7 +3,10 @@ package tiktok
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/utils"
 	"github.com/go-rod/stealth"
 )
 
@@ -22,8 +26,9 @@ const (
 // Responsável APENAS por navegar em hashtag pages e coletar URLs de vídeos.
 // Não abre páginas de vídeos individuais — isso é responsabilidade do Scraper Worker.
 type Source struct {
-	browser *rod.Browser
-	dedup   *repository.Deduplicator
+	browser  *rod.Browser
+	launcher *launcher.Launcher
+	dedup    *repository.Deduplicator
 }
 
 const maxVideos = 150
@@ -32,33 +37,83 @@ const maxVideos = 150
 // O browser persiste sessão em ./browser_state_discovery para manter cookies/tokens
 // e evitar captchas repetidos na página da hashtag.
 func NewSource(dedup *repository.Deduplicator) *Source {
-	path, _ := launcher.LookPath()
+	userDataDir := "./browser_state_discovery"
+
+	// Cleanup stale lock files that often cause "Failed to get the debug url"
+	// if a previous session crashed or didn't close properly.
+	lockFile := filepath.Join(userDataDir, "lockfile")
+	activePort := filepath.Join(userDataDir, "DevToolsActivePort")
+
+	if _, err := os.Stat(lockFile); err == nil {
+		fmt.Printf("[Discovery] Removendo lockfile antigo: %s\n", lockFile)
+		os.Remove(lockFile)
+	}
+	if _, err := os.Stat(activePort); err == nil {
+		fmt.Printf("[Discovery] Removendo DevToolsActivePort antigo: %s\n", activePort)
+		os.Remove(activePort)
+	}
 
 	l := launcher.New().
-		Bin(path).
-		UserDataDir("./browser_state_discovery"). // Persiste sessão para hashtag pages
+		UserDataDir(userDataDir). // Persiste sessão para hashtag pages
 		Leakless(false).
 		Headless(false).
+		NoSandbox(true).
 		Devtools(true)
 
-	u := l.MustLaunch()
+	// Usa browser instalado no sistema se encontrar; senão go-rod baixa Chromium
+	if chromePath, found := launcher.LookPath(); found {
+		fmt.Printf("[Discovery] Usando browser em: %s\n", chromePath)
+		l = l.Bin(chromePath)
+	} else {
+		fmt.Println("[Discovery] Chrome não encontrado no PATH, o Rod tentará baixar o Chromium...")
+	}
+
+	// Tenta lançar o browser com tratamento de erro explícito
+	u, err := l.Launch()
+	if err != nil {
+		log.Printf("[Discovery] ERRO CRÍTICO ao lançar browser principal: %v\n", err)
+		// Se falhar de vez, tentamos criar um "novo" launcher limpo como fallback
+		log.Println("[Discovery] Tentando lançamento de emergência limpo (sem UserDataDir)...")
+
+		l = launcher.New().
+			Leakless(false).
+			Headless(false).
+			NoSandbox(true).
+			Devtools(true)
+
+		if chromePath, found := launcher.LookPath(); found {
+			l = l.Bin(chromePath)
+		}
+
+		u = l.MustLaunch()
+	}
+
 	browser := rod.New().ControlURL(u).MustConnect()
 
-	go browser.ServeMonitor(":9222")
+	// Monitor para debug via navegador
+	go func() {
+		defer utils.Pause()
+		browser.ServeMonitor(":9222")
+	}()
 
-	return &Source{browser: browser, dedup: dedup}
+	return &Source{browser: browser, launcher: l, dedup: dedup}
 }
 
 func (s *Source) Name() string {
 	return "TikTok-Rod-Discovery"
 }
 
-// Close fecha o browser
+// Close fecha o browser de forma limpa garantindo que o processo morra
 func (s *Source) Close() error {
+	var err error
 	if s.browser != nil {
-		return s.browser.Close()
+		err = s.browser.Close()
 	}
-	return nil
+	if s.launcher != nil {
+		s.launcher.Cleanup()
+		fmt.Println("[Discovery] Processo do browser encerrado via launcher.Cleanup()")
+	}
+	return err
 }
 
 // DiscoveredVideo contém apenas o ID e URL de um vídeo descoberto.
@@ -108,7 +163,7 @@ func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, er
 	time.Sleep(2 * time.Second)
 
 	if isCaptchaPresent(page) {
-		if err := s.handleCaptcha(page); err != nil {
+		if err := s.handleCaptcha(page, query); err != nil {
 			return nil, fmt.Errorf("captcha: %w", err)
 		}
 		start = time.Now()
@@ -199,14 +254,14 @@ func (s *Source) collectVideoURLs(page *rod.Page) []string {
 	return urls
 }
 
-func (s *Source) handleCaptcha(page *rod.Page) error {
+func (s *Source) handleCaptcha(page *rod.Page, ctxStr string) error {
 	captchaType := detectCaptchaType(page)
-	fmt.Printf("[Captcha] tipo: %s\n", captchaType)
+	fmt.Printf("[%s] [Captcha] tipo: %s\n", ctxStr, captchaType)
 
 	var err error
 	switch captchaType {
 	case CaptchaTypeRotate:
-		err = handleRotateCaptcha(page)
+		err = handleRotateCaptcha(page, ctxStr)
 	case CaptchaTypePuzzle:
 		err = handlePuzzleCaptcha(page)
 	default:
@@ -233,29 +288,32 @@ func isCaptchaPresent(page *rod.Page) bool {
 		urlStr = info.URL
 	}
 
-	if strings.Contains(strings.ToLower(urlStr), "verify") ||
-		strings.Contains(strings.ToLower(urlStr), "captcha") {
+	if strings.Contains(strings.ToLower(urlStr), "captcha") {
 		return true
 	}
 
-	if _, err := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"]`); err == nil {
+	if has, _, err := page.Has(`iframe[src*="captcha"]`); err == nil && has {
 		return true
 	}
 
-	for _, sel := range []string{
+	strictSelectors := []string{
 		".captcha_verify_container",
 		".captcha_verify_img_slide",
-		"[class*='captcha']",
 		"[class*='secsdk-captcha']",
 		"[id*='captcha']",
-		"div[class*='verify']",
-	} {
-		if _, err := page.Timeout(1 * time.Second).Element(sel); err == nil {
-			return true
-		}
+		"div[class*='captcha_verify']",
 	}
 
-	if _, err := page.Timeout(1*time.Second).ElementR("*", "(?i)(drag.*slider|fit.*puzzle|verify|captcha)"); err == nil {
+	if has, _, err := page.Has(strings.Join(strictSelectors, ", ")); err == nil && has {
+		return true
+	}
+
+	result, err := page.Eval(`() => {
+		const text = document.body.innerText.toLowerCase();
+		return text.includes('drag the slider') || text.includes('fit the puzzle') || text.includes('captcha');
+	}`)
+
+	if err == nil && result.Value.Bool() {
 		return true
 	}
 

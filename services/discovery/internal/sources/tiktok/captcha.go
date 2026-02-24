@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/loviiin/project-argus/pkg/captcha"
 	"github.com/nats-io/nats.go"
 )
 
@@ -91,13 +92,11 @@ func detectCaptchaType(page *rod.Page) CaptchaType {
 
 // handleRotateCaptcha resolve captcha do tipo Rotate usando Vision Service
 // A rotação é controlada por um slider horizontal
-func handleRotateCaptcha(page *rod.Page) error {
-	fmt.Println("🔄 [Captcha] Detectado captcha de ROTAÇÃO")
+func handleRotateCaptcha(page *rod.Page, ctxStr string) error {
+	fmt.Printf("[%s] 🔄 [Captcha] Detectado captcha de ROTAÇÃO\n", ctxStr)
 
 	const maxRetries = 5
 	const retryDelay = 2 * time.Second
-
-	var lastOuterB64, lastInnerB64 string
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
@@ -105,12 +104,11 @@ func handleRotateCaptcha(page *rod.Page) error {
 			time.Sleep(retryDelay)
 		}
 
-		outerB64, innerB64, err := extractRotateImages(page)
+		outerB64, innerB64, err := captcha.ExtractRotateImages(page)
 		if err != nil {
 			fmt.Printf("⚠️  [Captcha] Erro extraindo imagens (tentativa %d): %v\n", attempt, err)
 			continue
 		}
-		lastOuterB64, lastInnerB64 = outerB64, innerB64
 
 		var angle float64
 		angle, err = solvePuzzleWithVisionService(outerB64, innerB64)
@@ -208,14 +206,13 @@ func handleRotateCaptcha(page *rod.Page) error {
 		fmt.Printf("⚠️  [Captcha] Ainda presente após rotação (tentativa %d)\n", attempt)
 	}
 
-	fmt.Println("⚠️  [Captcha] Tentativas automáticas esgotadas para ROTAÇÃO.")
-	if lastOuterB64 != "" {
-		SaveCaptchaSample("rotate", map[string]string{
-			"outer": lastOuterB64,
-			"inner": lastInnerB64,
-		}, true)
+	fmt.Printf("[%s] ⚠️  [Captcha] Tentativas automáticas esgotadas para ROTAÇÃO.\n", ctxStr)
+	fmt.Printf("[%s] 🕵️  [Shadow] Iniciando Shadow Collector para coleta de dados...\n", ctxStr)
+	if err := captcha.RunShadowCollector(page, "./dataset/rotation_captcha", "discovery"); err != nil {
+		fmt.Printf("[%s] ⚠️  [Shadow] Coleta falhou: %v\n", ctxStr, err)
+		return ErrCaptchaTimeout
 	}
-	return waitCaptchaResolution(page, 5*time.Minute)
+	return nil
 }
 
 // handlePuzzleCaptcha resolve captcha do tipo Puzzle usando SadCaptcha
@@ -292,132 +289,6 @@ func handlePuzzleCaptcha(page *rod.Page) error {
 	return waitCaptchaResolution(page, 5*time.Minute)
 }
 
-// extractRotateImages extrai as imagens do captcha de rotação em Base64
-func extractRotateImages(page *rod.Page) (outer, inner string, err error) {
-	fmt.Println("🔍 [Captcha] Extraindo imagens do captcha de rotação...")
-
-	// Para o TikTok, há 2 imagens com alt="Captcha"
-	// A primeira é o círculo externo (outer), a segunda é o círculo interno (inner)
-
-	// Estratégia 1: Buscar por alt="Captcha"
-	captchaImages, err := page.Elements("img[alt='Captcha']")
-	if err == nil && len(captchaImages) >= 2 {
-		fmt.Printf("✅ [Captcha] Encontradas %d imagens com alt='Captcha'\n", len(captchaImages))
-
-		// Primeira imagem = outer (círculo externo/fundo)
-		outerSrc, err := captchaImages[0].Attribute("src")
-		if err == nil && outerSrc != nil {
-			outer = *outerSrc
-			fmt.Println("📸 [Captcha] Outer (fundo) extraído")
-		}
-
-		// Segunda imagem = inner (círculo interno/rotativo)
-		innerSrc, err := captchaImages[1].Attribute("src")
-		if err == nil && innerSrc != nil {
-			inner = *innerSrc
-			fmt.Println("📸 [Captcha] Inner (rotativo) extraído")
-		}
-	}
-
-	// Estratégia 2: Buscar por classes específicas
-	if outer == "" || inner == "" {
-		fmt.Println("🔄 [Captcha] Tentando estratégia alternativa (por classe)...")
-
-		// Outer: altura maior (170px ou 210px)
-		if outer == "" {
-			outerSelectors := []string{
-				"img[class*='cap-h-[170px]']",
-				"img[class*='cap-h-[210px]']",
-				"img[class*='sm:cap-h-[210px]']",
-			}
-			for _, selector := range outerSelectors {
-				if el, err := page.Timeout(1 * time.Second).Element(selector); err == nil {
-					if src, err := el.Attribute("src"); err == nil && src != nil {
-						outer = *src
-						fmt.Printf("✅ [Captcha] Outer encontrado via: %s\n", selector)
-						break
-					}
-				}
-			}
-		}
-
-		// Inner: altura menor (105px ou 128px) + classe absolute
-		if inner == "" {
-			innerSelectors := []string{
-				"img[class*='cap-absolute']",
-				"img[class*='cap-h-[105px]']",
-				"img[class*='cap-h-[128px]']",
-				"img[class*='sm:cap-h-[128px]']",
-			}
-			for _, selector := range innerSelectors {
-				if el, err := page.Timeout(1 * time.Second).Element(selector); err == nil {
-					if src, err := el.Attribute("src"); err == nil && src != nil {
-						inner = *src
-						fmt.Printf("✅ [Captcha] Inner encontrado via: %s\n", selector)
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// Estratégia 3: Fallback - todas as imagens no container de captcha
-	if outer == "" || inner == "" {
-		fmt.Println("🔄 [Captcha] Tentando estratégia de fallback (container)...")
-
-		containerSelectors := []string{
-			"[class*='captcha-verify-container']",
-			"[class*='TUXModal']",
-		}
-
-		for _, containerSel := range containerSelectors {
-			container, err := page.Timeout(2 * time.Second).Element(containerSel)
-			if err == nil {
-				images, _ := container.Elements("img")
-				if len(images) >= 2 {
-					if outer == "" {
-						if src, err := images[0].Attribute("src"); err == nil && src != nil {
-							outer = *src
-							fmt.Println("📸 [Captcha] Outer extraído do container")
-						}
-					}
-					if inner == "" {
-						if src, err := images[1].Attribute("src"); err == nil && src != nil {
-							inner = *src
-							fmt.Println("📸 [Captcha] Inner extraído do container")
-						}
-					}
-					break
-				}
-			}
-		}
-	}
-
-	// Converte as URLs/data URLs para Base64 puro
-	if outer != "" {
-		outer, err = downloadImageAsBase64(outer)
-		if err != nil {
-			return "", "", fmt.Errorf("erro processando outer: %w", err)
-		}
-	}
-
-	if inner != "" {
-		inner, err = downloadImageAsBase64(inner)
-		if err != nil {
-			return "", "", fmt.Errorf("erro processando inner: %w", err)
-		}
-	}
-
-	if outer == "" || inner == "" {
-		fmt.Printf("❌ [Captcha] Extração incompleta - Outer: %v, Inner: %v\n",
-			outer != "", inner != "")
-		return "", "", ErrCaptchaNotFound
-	}
-
-	fmt.Println("✅ [Captcha] Ambas as imagens de rotação extraídas com sucesso")
-	return outer, inner, nil
-}
-
 // extractPuzzleImages extrai as imagens do captcha de puzzle em Base64
 func extractPuzzleImages(page *rod.Page) (background, piece string, err error) {
 	// Usa a função existente extractCaptchaImages
@@ -427,12 +298,12 @@ func extractPuzzleImages(page *rod.Page) (background, piece string, err error) {
 	}
 
 	// Baixa e converte as URLs para Base64
-	background, err = downloadImageAsBase64(images.BackgroundURL)
+	background, err = captcha.DownloadImageAsBase64(images.BackgroundURL)
 	if err != nil {
 		return "", "", fmt.Errorf("erro baixando background: %w", err)
 	}
 
-	piece, err = downloadImageAsBase64(images.PieceURL)
+	piece, err = captcha.DownloadImageAsBase64(images.PieceURL)
 	if err != nil {
 		return "", "", fmt.Errorf("erro baixando piece: %w", err)
 	}
@@ -460,36 +331,11 @@ func extractImageAsBase64(el *rod.Element) (string, error) {
 		}
 
 		// Se é URL, baixa
-		return downloadImageAsBase64(*src)
+		return captcha.DownloadImageAsBase64(*src)
 	}
 
 	// Converte para Base64
 	return base64.StdEncoding.EncodeToString(resource), nil
-}
-
-// downloadImageAsBase64 baixa uma imagem de uma URL e retorna em Base64
-func downloadImageAsBase64(imageURL string) (string, error) {
-	// Se já é data URL, extrai o base64
-	if strings.HasPrefix(imageURL, "data:image") {
-		parts := strings.Split(imageURL, ",")
-		if len(parts) > 1 {
-			return parts[1], nil
-		}
-	}
-
-	// Baixa a imagem
-	resp, err := http.Get(imageURL)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	return base64.StdEncoding.EncodeToString(data), nil
 }
 
 // solveRotateWithSadCaptcha chama a API do SadCaptcha para resolver Rotate

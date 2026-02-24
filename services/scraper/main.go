@@ -132,7 +132,7 @@ func main() {
 		cancel()
 	}()
 
-	sem := make(chan struct{}, 5) // Max 5 browsers simultâneos
+	sem := make(chan struct{}, 1) // Max 1 browser simultâneo por worker
 	var wg sync.WaitGroup
 
 loop:
