@@ -127,13 +127,26 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 	}
 	time.Sleep(3 * time.Second)
 
-	if isCaptchaPresent(page) {
-		fmt.Println("[Worker] Captcha detectado! Iniciando Shadow Collector...")
-		if err := captcha.RunShadowCollector(page, "../discovery/dataset/rotation_captcha", "scraper"); err != nil {
-			return nil, fmt.Errorf("shadow collector abortou a extração: %w", err)
+	// Helper inline para não repetir código
+	handleCaptchaIfNeeded := func(ctx string) error {
+		if isCaptchaPresent(page) {
+			fmt.Printf("[Worker] Captcha detectado (%s)! Iniciando Shadow Collector...\n", ctx)
+			if err := captcha.RunShadowCollector(page, "../discovery/dataset/rotation_captcha", "scraper"); err != nil {
+				fmt.Printf("[Worker] Shadow collector falhou ou deu timeout: %v\n", err)
+			}
+			if isCaptchaPresent(page) {
+				if err := waitCaptchaResolution(page, 5*time.Minute); err != nil {
+					return fmt.Errorf("falha aguardando resolução manual: %w", err)
+				}
+			}
+			page.Timeout(10 * time.Second).WaitLoad()
+			time.Sleep(3 * time.Second)
 		}
-		page.Timeout(10 * time.Second).WaitLoad()
-		time.Sleep(3 * time.Second)
+		return nil
+	}
+
+	if err := handleCaptchaIfNeeded("load_inicial"); err != nil {
+		return nil, err
 	}
 
 	// Clica no botão de comentários
@@ -201,6 +214,11 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 		for _, btn := range replyBtns {
 			_, _ = btn.Eval("() => this.click()")
 			time.Sleep(200 * time.Millisecond)
+		}
+
+		// O TikTok pode jogar Captchas durante o clique em "View Replies" ou no Scroll excessivo
+		if err := handleCaptchaIfNeeded(fmt.Sprintf("loop_comentarios_%d", pass+1)); err != nil {
+			return nil, err
 		}
 	}
 
@@ -293,32 +311,31 @@ func isCaptchaPresent(page *rod.Page) bool {
 		urlStr = info.URL
 	}
 
-	if strings.Contains(strings.ToLower(urlStr), "captcha") {
+	if strings.Contains(strings.ToLower(urlStr), "verify") ||
+		strings.Contains(strings.ToLower(urlStr), "captcha") {
 		return true
 	}
 
-	if has, _, err := page.Has(`iframe[src*="captcha"]`); err == nil && has {
+	// Tenta checar rápido se existe IFrame do Captcha (comum no TikTok)
+	if _, err := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"]`); err == nil {
 		return true
 	}
 
-	strictSelectors := []string{
+	for _, sel := range []string{
 		".captcha_verify_container",
 		".captcha_verify_img_slide",
+		"[class*='captcha']",
 		"[class*='secsdk-captcha']",
 		"[id*='captcha']",
-		"div[class*='captcha_verify']",
+		"div[class*='verify']",
+	} {
+		if _, err := page.Timeout(1 * time.Second).Element(sel); err == nil {
+			return true
+		}
 	}
 
-	if has, _, err := page.Has(strings.Join(strictSelectors, ", ")); err == nil && has {
-		return true
-	}
-
-	result, err := page.Eval(`() => {
-		const text = document.body.innerText.toLowerCase();
-		return text.includes('drag the slider') || text.includes('fit the puzzle') || text.includes('captcha');
-	}`)
-
-	if err == nil && result.Value.Bool() {
+	// Regex Textual rápido em vez de Eval custoso
+	if _, err := page.Timeout(1*time.Second).ElementR("*", "(?i)(drag.*slider|fit.*puzzle|verify|captcha)"); err == nil {
 		return true
 	}
 
