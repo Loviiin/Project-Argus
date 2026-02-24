@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
+	"github.com/loviiin/project-argus/pkg/config"
 )
 
 // NewBrowser cria uma instância de browser Rod com estado persistente.
@@ -17,12 +18,18 @@ func NewBrowser(stateDir string, debugPort string) (*rod.Browser, error) {
 		Bin(path).
 		UserDataDir(stateDir).
 		Leakless(false).
-		Headless(false).
 		Devtools(true).
 		Set("autoplay-policy", "no-user-gesture-required"). // Permite autoplay de vídeos
 		Set("use-gl", "swiftshader").                       // Software rendering para containers
 		Set("disable-gpu").                                 // Evita problemas de GPU em containers
 		Set("no-sandbox")                                   // Necessário em containers Linux
+
+	cfg := config.LoadConfig()
+	if cfg.Browser.Headless {
+		l = l.Set("headless", "new") // Para produção (Evasão Anti-Bot)
+	} else {
+		l = l.Headless(false) // Para desenvolvimento/VNC (Permite ver a tela)
+	}
 
 	u, err := l.Launch()
 	if err != nil {

@@ -3,19 +3,25 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
+
+var ErrCircuitOpen = errors.New("circuit breaker open")
 
 type HTTPDiscordClient struct {
 	httpClient   *http.Client
 	proxyEnabled bool
+	rdb          *redis.Client
 }
 
-func NewHTTPDiscordClient(proxyURLStr string) *HTTPDiscordClient {
+func NewHTTPDiscordClient(proxyURLStr string, rdb *redis.Client) *HTTPDiscordClient {
 	transport := &http.Transport{}
 	proxyEnabled := false
 
@@ -33,10 +39,16 @@ func NewHTTPDiscordClient(proxyURLStr string) *HTTPDiscordClient {
 			Transport: transport,
 		},
 		proxyEnabled: proxyEnabled,
+		rdb:          rdb,
 	}
 }
 
 func (c *HTTPDiscordClient) GetInviteInfo(ctx context.Context, inviteCode string) (*DiscordInviteResponse, error) {
+	circuitKey := "argus:circuit_breaker:discord"
+	if exists, _ := c.rdb.Exists(ctx, circuitKey).Result(); exists > 0 {
+		return nil, ErrCircuitOpen
+	}
+
 	if c.proxyEnabled {
 		fmt.Printf("[API Client] 🌍 Fazendo requisição para %s usando PROXY ROTATIVO!\n", inviteCode)
 	} else {
@@ -65,6 +77,7 @@ func (c *HTTPDiscordClient) GetInviteInfo(ctx context.Context, inviteCode string
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
+		c.rdb.Set(ctx, circuitKey, "1", 5*time.Minute)
 		return nil, fmt.Errorf("rate limited (muitas requisições)")
 	}
 

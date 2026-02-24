@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"os/signal"
 	"sync"
@@ -178,7 +179,17 @@ loop:
 
 			log.Printf("[Worker %s] 📥 Recebido job: %s (%s) [Tentativa: %d]", workerIDStr, job.VideoID, job.Hashtag, meta.NumDelivered)
 
-			// 1. Padrão de Idempotência
+			// 1. Worker Heartbeat/Processing Lock
+			lockKey := fmt.Sprintf("argus:processing_lock:%s", job.VideoID)
+			if locked, _ := dedup.rdb.SetNX(ctx, lockKey, "1", 10*time.Minute).Result(); !locked {
+				delay := time.Duration(30+rand.Intn(30)) * time.Second
+				log.Printf("[Worker %s] Job %s bloqueado por lock. Nak + Jitter: %v", workerIDStr, job.VideoID, delay)
+				m.NakWithDelay(delay)
+				return
+			}
+			defer dedup.rdb.Del(ctx, lockKey)
+
+			// 2. Padrão de Idempotência Definitiva
 			processed, err := dedup.CheckIfProcessed(ctx, job.VideoID)
 			if err == nil && processed {
 				log.Printf("[Worker %s] Mensagem duplicada ignorada: %s", workerIDStr, job.VideoID)
@@ -187,7 +198,7 @@ loop:
 			}
 
 			// 3. Dead Letter Queue (DLQ)
-			if meta.NumDelivered > 5 {
+			if meta.NumDelivered > 15 {
 				log.Printf("[Worker %s] 🚨 Max Retries atingido para %s. Enviando para DLQ...", workerIDStr, job.VideoID)
 				dlqPayload := map[string]interface{}{
 					"error": "Max retries exceeded",

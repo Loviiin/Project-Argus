@@ -12,7 +12,7 @@ func NewDiscordClient(mode string, proxyURL string, token string, rdb *redis.Cli
 		if proxyURL != "" {
 			log.Println("[Factory] 🌐 Proxy HTTP Configurado para contornar Rate Limits!")
 		}
-		return NewHTTPDiscordClient(proxyURL)
+		return NewHTTPDiscordClient(proxyURL, rdb)
 	}
 
 	log.Println("[Factory] Inicializando Discord Client via Go-Rod (Browser Scraper)")
