@@ -16,7 +16,6 @@ import (
 	"github.com/go-rod/stealth"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
-	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -30,7 +29,6 @@ type Source struct {
 	browser  *rod.Browser
 	launcher *launcher.Launcher
 	dedup    *dedup.Deduplicator
-	rdb      *redis.Client
 }
 
 const maxVideos = 150
@@ -38,7 +36,7 @@ const maxVideos = 150
 // NewSource cria uma nova instância do TikTok discovery source.
 // O browser persiste sessão em ./browser_state_discovery para manter cookies/tokens
 // e evitar captchas repetidos na página da hashtag.
-func NewSource(dedup *dedup.Deduplicator, rdb *redis.Client) *Source {
+func NewSource(dedup *dedup.Deduplicator) *Source {
 	userDataDir := "./browser_state_discovery"
 
 	// Cleanup stale lock files that often cause "Failed to get the debug url"
@@ -109,7 +107,7 @@ func NewSource(dedup *dedup.Deduplicator, rdb *redis.Client) *Source {
 		browser.ServeMonitor(":9222")
 	}()
 
-	return &Source{browser: browser, launcher: l, dedup: dedup, rdb: rdb}
+	return &Source{browser: browser, launcher: l, dedup: dedup}
 }
 
 func (s *Source) Name() string {
@@ -167,8 +165,7 @@ func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, er
 			return nil, fmt.Errorf("erro redis para %s: %w", videoID, err)
 		}
 		if isProcessed {
-			fmt.Printf("[Discovery] skip (já visto): %s\n", videoID)
-			s.rdb.Incr(ctx, "argus:metrics:discovery:duplicates")
+			fmt.Printf("[Discovery] skip (j\u00e1 visto): %s\n", videoID)
 			return nil, nil
 		}
 		return []DiscoveredVideo{{ID: videoID, URL: query}}, nil
@@ -242,7 +239,6 @@ func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, er
 		}
 		if isProcessed {
 			fmt.Printf("[Discovery] skip (já visto): %s\n", videoID)
-			s.rdb.Incr(ctx, "argus:metrics:discovery:duplicates")
 			continue
 		}
 
