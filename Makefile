@@ -1,17 +1,24 @@
-.PHONY: all up down logs setup clean
+.PHONY: all up down logs setup clean clean-data clean-workers
 .PHONY: setup-go setup-python setup-discovery setup-scraper
-.PHONY: run-parser run-vision run-discovery run-scraper run-captcha-solver
-.PHONY: send-payload nats-start nats-stop nats-test
-.PHONY: test-captcha test-captcha-full test-captcha-stop test-discovery-captcha
+.PHONY: run-parser run-vision run-discovery run-captcha-solver
+.PHONY: run-worker-1 run-worker-2 run-worker-3 run-worker-4 run-worker-5 run-worker-6
+.PHONY: test test-unit test-dedup test-captcha train-vision
 .PHONY: build-discovery build-scraper build-parser build-vision build-all
+.PHONY: help vnc
 
 # 🚀 Project Argus - Makefile
 # ============================
 #
-# 🧪 Teste Rápido de Captcha (Vision + Discovery):
-#   1. make up                    # Inicia infraestrutura (NATS, Redis, etc)
-#   2. make run-captcha-solver    # Terminal 1: Inicia Vision Service
-#   3. make run-discovery         # Terminal 2: Inicia Discovery
+# 🎯 Início Rápido:
+#   1. make up                    # Inicia infraestrutura (NATS, Redis, PostgreSQL, Meilisearch)
+#   2. make run-discovery         # Terminal 1: Inicia Discovery
+#   3. make run-worker-1          # Terminal 2: Inicia Worker/Scraper
+#   4. make run-parser            # Terminal 3: Inicia Parser
+#
+# 🧪 Testes:
+#   make test                     # Roda todos os testes
+#   make test-dedup               # Testa sistema de deduplicação
+#   make test-unit                # Testa lógica do TikTok Discovery
 #
 # 📚 Comandos disponíveis:
 #   make help                     # Lista todos os comandos
@@ -39,6 +46,15 @@ clean-data: ## Apaga todos os volumes (DB, Redis, NATS, Meili) e recria a infra 
 logs: ## Mostra os logs da infraestrutura
 	docker-compose logs -f
 
+clean-workers: ## Limpa travas (locks) e processos presos do Chromium dos workers
+	@echo "🧹 Limpando processos e locks dos workers..."
+	-@pkill -f chrome 2>/dev/null || true
+	-@pkill -f chromium 2>/dev/null || true
+	-@rm -f services/scraper/browser_state_worker_*/SingletonLock
+	-@rm -f services/scraper/browser_state_worker_*/SingletonCookie
+	-@rm -f services/scraper/browser_state_worker_*/SingletonSocket
+	@echo "✅ Limpeza concluída!"
+
 # --- Setup & Dependencies ---
 
 setup: setup-go setup-discovery setup-python ## Instala dependências de todos os serviços
@@ -56,11 +72,25 @@ setup-scraper:
 	@echo "Instalando deps do Scraper (Go)..."
 	cd services/scraper && go mod tidy
 
-
 setup-python:
 	cd services/vision && python3 -m venv .venv
 	cd services/vision && ./.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 	cd services/vision && ./.venv/bin/pip install -r requirements.txt
+
+# --- Tests ---
+
+test: test-unit test-dedup ## Roda todos os testes
+
+test-unit: ## Roda testes unitários do Discovery (TikTok)
+	@echo "🧪 Rodando testes unitários..."
+	cd services/discovery/internal/sources/tiktok && go test -v
+
+test-dedup: ## Testa sistema de deduplicação (Redis)
+	@echo "🧪 Testando sistema de deduplicação..."
+	./scripts/test-deduplication.sh
+
+test-captcha: ## Teste rápido de captcha (apenas script)
+	@./scripts/test-captcha.sh
 
 # --- Run Services ---
 
@@ -70,116 +100,66 @@ run-parser: ## Roda o serviço Parser (Go)
 run-discovery: ## Roda o serviço Discovery (Publisher)
 	cd services/discovery && go run main.go
 
-run-scraper: ## Roda o Scraper Worker (Subscriber)
-	cd services/scraper && go run main.go
+# Workers/Scrapers (pode rodar múltiplos em paralelo)
 
-run-worker-1: ## Roda o Scraper Worker 1
+run-worker-1: ## Roda Worker/Scraper 1
 	cd services/scraper && WORKER_ID=1 go run main.go
 
-run-worker-2: ## Roda o Scraper Worker 2
+run-worker-2: ## Roda Worker/Scraper 2
 	cd services/scraper && WORKER_ID=2 go run main.go
 
-run-worker-3: ## Roda o Scraper Worker 3
+run-worker-3: ## Roda Worker/Scraper 3
 	cd services/scraper && WORKER_ID=3 go run main.go
 
-run-worker-4: ## Roda o Scraper Worker 4
+run-worker-4: ## Roda Worker/Scraper 4
 	cd services/scraper && WORKER_ID=4 go run main.go
 
-run-worker-5: ## Roda o Scraper Worker 5
+run-worker-5: ## Roda Worker/Scraper 5
 	cd services/scraper && WORKER_ID=5 go run main.go
 
-run-worker-6: ## Roda o Scraper Worker 6
+run-worker-6: ## Roda Worker/Scraper 6
 	cd services/scraper && WORKER_ID=6 go run main.go
 
-run-vision:
+run-vision: ## Roda o serviço Vision (ML)
 	cd services/vision && ./.venv/bin/python src/main.py
+
+run-captcha-solver: ## Roda o Captcha Solver (Vision)
+	cd services/vision && ./.venv/bin/python -m src.captcha_solver
+
+# --- Vision/ML ---
 
 train-vision: ## Treina o modelo ML do Captcha de Rotação
 	cd services/vision && ./.venv/bin/python scripts/train.py
 
-run-captcha-solver:
-	cd services/vision && ./.venv/bin/python -m src.captcha_solver
+# --- Build ---
 
-nats-start:
-	@if command -v nats-server > /dev/null; then \
-		nats-server -p 4222 & \
-		echo "NATS running at nats://localhost:4222"; \
-	else \
-		echo "nats-server not found. Install with:"; \
-		echo "  Linux: curl -L https://github.com/nats-io/nats-server/releases/latest/download/nats-server-linux-amd64.tar.gz | tar xz"; \
-		echo "  Docker: docker run -p 4222:4222 nats:latest"; \
-	fi
-
-nats-stop:
-	@pkill -f nats-server || echo "NATS was not running"
-
-nats-test:
-	@if command -v nats > /dev/null; then \
-		nats pub test.topic "ping" && echo "NATS OK"; \
-	else \
-		echo "nats CLI not found. Install: go install github.com/nats-io/natscli/nats@latest"; \
-	fi
-
-test-captcha:
-	@./scripts/test-captcha.sh
-
-test-captcha-full:
-	@echo "Checking NATS..."
-	@docker ps | grep nats > /dev/null || (echo "NATS not running. Run: make up" && exit 1)
-	@echo "NATS OK"
-	@cd services/vision && NATS_URL=nats://localhost:4222 ./.venv/bin/python -m src.captcha_solver > /tmp/vision.log 2>&1 & echo $$! > /tmp/vision.pid
-	@sleep 2
-	@echo "✅ Vision Service iniciado (PID: $$(cat /tmp/vision.pid))"
-	@echo ""
-	@echo "3️⃣  Testando Discovery (simulação)..."
-	@echo "   Para testar de verdade, execute manualmente:"
-	@echo "   cd services/discovery && go run main.go"
-	@echo ""
-	@echo "📝 Logs do Vision: tail -f /tmp/vision.log"
-	@echo "🛑 Para parar: make test-captcha-stop"
-
-test-captcha-stop:
-	@if [ -f /tmp/vision.pid ]; then \
-		kill $$(cat /tmp/vision.pid) 2>/dev/null || true; \
-		rm /tmp/vision.pid; \
-		echo "Vision stopped"; \
-	fi
-
-test-vision-logs:
-	@tail -f /tmp/vision.log
-
-test-discovery-captcha:
-	@cd services/discovery && NATS_URL=nats://localhost:4222 go run main.go
-
-build-discovery:
+build-discovery: ## Compila o Discovery
 	cd services/discovery && go build -o discovery main.go
 
-build-scraper:
+build-scraper: ## Compila o Scraper
 	cd services/scraper && go build -o scraper main.go
 
-build-parser:
+build-parser: ## Compila o Parser
 	cd services/parser && go build -o parser cmd/main.go
 
-build-vision:
+build-vision: ## Builda a imagem Docker do Vision
 	docker build -t argus-vision:latest services/vision
 
-build-all: build-discovery build-scraper build-parser build-vision
+build-all: build-discovery build-scraper build-parser build-vision ## Compila todos os serviços
 
-test-full:
-	./services/vision/.venv/bin/python tests/integration/test_full_flow.py
+# --- Utilities ---
 
-test-vision-job:
-	./services/vision/.venv/bin/python services/vision/tests/test_vision_job.py
-
-send-payload:
-	./services/vision/.venv/bin/python services/vision/tests/test_vision_payload.py
-
-help:
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-22s %s\n", $$1, $$2}'
-
-vnc:
+vnc: ## Reinicia o VNC (para debug visual)
 	@echo "♻️  Reiniciando VNC..."
 	-@pkill -f start-vnc.sh 2>/dev/null || true
 	-@pkill -f Xvfb 2>/dev/null || true
 	-@pkill -f x11vnc 2>/dev/null || true
 	@bash /usr/local/bin/start-vnc.sh
+
+help: ## Mostra esta mensagem de ajuda
+	@echo ""
+	@echo "🚀 Project Argus - Comandos Disponíveis"
+	@echo "========================================"
+	@echo ""
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
+	@echo ""

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -16,39 +15,10 @@ import (
 	"scraper/internal/worker"
 
 	"github.com/loviiin/project-argus/pkg/config"
+	"github.com/loviiin/project-argus/pkg/dedup"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 )
-
-// Deduplicator é uma cópia mínima para o worker marcar vídeos como vistos.
-type Deduplicator struct {
-	rdb *redis.Client
-}
-
-func NewDeduplicator(address, password string, db int) *Deduplicator {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     address,
-		Password: password,
-		DB:       db,
-	})
-	return &Deduplicator{rdb: rdb}
-}
-
-func (d *Deduplicator) CheckIfProcessed(ctx context.Context, jobID string) (bool, error) {
-	key := fmt.Sprintf("argus:processed_job:%s", jobID)
-	exists, err := d.rdb.Exists(ctx, key).Result()
-	return exists > 0, err
-}
-
-func (d *Deduplicator) MarkAsSeen(ctx context.Context, jobID string) error {
-	key := fmt.Sprintf("argus:processed_job:%s", jobID)
-	_, err := d.rdb.Set(ctx, key, "1", 7*24*60*60*time.Second).Result() // 7 dias TTL
-	return err
-}
-
-func (d *Deduplicator) Close() error {
-	return d.rdb.Close()
-}
 
 func main() {
 	cfg := config.LoadConfig()
@@ -87,8 +57,13 @@ func main() {
 	}
 
 	// --- Redis ---
-	dedup := NewDeduplicator(cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
-	defer dedup.Close()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
+	defer dedupSv.Close()
 
 	// --- Worker Setup ---
 	workerIDStr := os.Getenv("WORKER_ID")
@@ -181,16 +156,16 @@ loop:
 
 			// 1. Worker Heartbeat/Processing Lock
 			lockKey := fmt.Sprintf("argus:processing_lock:%s", job.VideoID)
-			if locked, _ := dedup.rdb.SetNX(ctx, lockKey, "1", 10*time.Minute).Result(); !locked {
+			if locked, _ := dedupSv.RDB().SetNX(ctx, lockKey, "1", 10*time.Minute).Result(); !locked {
 				delay := time.Duration(30+rand.Intn(30)) * time.Second
 				log.Printf("[Worker %s] Job %s bloqueado por lock. Nak + Jitter: %v", workerIDStr, job.VideoID, delay)
 				m.NakWithDelay(delay)
 				return
 			}
-			defer dedup.rdb.Del(ctx, lockKey)
+			defer dedupSv.RDB().Del(ctx, lockKey)
 
 			// 2. Padrão de Idempotência Definitiva
-			processed, err := dedup.CheckIfProcessed(ctx, job.VideoID)
+			processed, err := dedupSv.CheckIfProcessed(ctx, "processed_job", job.VideoID)
 			if err == nil && processed {
 				log.Printf("[Worker %s] Mensagem duplicada ignorada: %s", workerIDStr, job.VideoID)
 				m.Ack()
@@ -223,7 +198,7 @@ loop:
 			if err != nil {
 				log.Printf("[Worker %s] ❌ erro processando %s: %v", workerIDStr, job.VideoID, err)
 				// 2. Exponential Backoff Nak
-				delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+				delay := time.Duration(10+rand.Intn(20)) * time.Second // Jittered delay
 				log.Printf("[Worker %s] ⏳ Nak no job %s com delay de %v", workerIDStr, job.VideoID, delay)
 				m.NakWithDelay(delay)
 				return
@@ -244,7 +219,7 @@ loop:
 			data, err := json.Marshal(payload)
 			if err != nil {
 				log.Printf("[Worker %s] ❌ erro marshal payload %s: %v", workerIDStr, job.VideoID, err)
-				delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+				delay := time.Duration(10+rand.Intn(20)) * time.Second // Jittered delay
 				m.NakWithDelay(delay)
 				return
 			}
@@ -252,7 +227,7 @@ loop:
 			_, err = js.Publish("data.text_extracted", data)
 			if err != nil {
 				log.Printf("[Worker %s] ❌ erro publicar resultado %s: %v", workerIDStr, job.VideoID, err)
-				delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
+				delay := time.Duration(10+rand.Intn(20)) * time.Second // Jittered delay
 				m.NakWithDelay(delay)
 				return
 			}
@@ -260,7 +235,7 @@ loop:
 			log.Printf("[Worker %s] ✅ Publicado: %s → data.text_extracted", workerIDStr, job.VideoID)
 
 			// Só marca como visto DEPOIS do publish com sucesso (Idempotência final)
-			if err := dedup.MarkAsSeen(ctx, job.VideoID); err != nil {
+			if err := dedupSv.MarkAsSeen(ctx, "processed_job", job.VideoID); err != nil {
 				log.Printf("[Worker %s] ⚠️  erro redis MarkAsSeen %s: %v", workerIDStr, job.VideoID, err)
 			}
 

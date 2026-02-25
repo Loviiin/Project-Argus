@@ -8,12 +8,13 @@ import (
 	"syscall"
 	"time"
 
-	"discovery/internal/repository"
 	"discovery/internal/service"
 	"discovery/internal/sources"
 
 	"github.com/loviiin/project-argus/pkg/config"
+	"github.com/loviiin/project-argus/pkg/dedup"
 	"github.com/nats-io/nats.go"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -37,9 +38,15 @@ func main() {
 	}
 	log.Println("Stream SCRAPE (jobs.scrape) pronto")
 
-	dedup := repository.NewDeduplicator(cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
+
 	log.Println("Inicializando driver do navegador (Discovery)...")
-	tikTokSource := sources.NewTikTokRodSource(dedup)
+	tikTokSource := sources.NewTikTokRodSource(dedupSv)
 
 	svc := service.NewDiscoveryService(js, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
 

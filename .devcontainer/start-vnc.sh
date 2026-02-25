@@ -11,9 +11,9 @@ pkill -f "websockify" 2>/dev/null || true
 sleep 1
 
 # Inicia display virtual (1280x800, 24-bit color)
-Xvfb :99 -screen 0 1280x800x24 &
+Xvfb :99 -screen 0 1700x1000x24 &
 export DISPLAY=:99
-echo "🖥️  Display virtual :99 iniciado (1280x800)"
+echo "🖥️  Display virtual :99 iniciado (1700x1000)"
 
 # Aguarda Xvfb estar pronto
 sleep 1

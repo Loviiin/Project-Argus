@@ -3,8 +3,9 @@ package sources
 import (
 	"context"
 
-	"discovery/internal/repository"
 	"discovery/internal/sources/tiktok"
+
+	"github.com/loviiin/project-argus/pkg/dedup"
 )
 
 // TikTokWrapper implementa a interface Source convertendo tipos do pacote tiktok.
@@ -13,7 +14,7 @@ type TikTokWrapper struct {
 }
 
 // NewTikTokRodSource cria uma nova instância do scraper TikTok Discovery.
-func NewTikTokRodSource(dedup *repository.Deduplicator) Source {
+func NewTikTokRodSource(dedup *dedup.Deduplicator) Source {
 	return &TikTokWrapper{
 		source: tiktok.NewTikTokRodSource(dedup),
 	}
