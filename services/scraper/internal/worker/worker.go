@@ -146,12 +146,12 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 
 	// Helper inline para não repetir código
 	handleCaptchaIfNeeded := func(ctx string) error {
-		if isCaptchaPresent(page) {
+		if captcha.IsCaptchaPresent(page) {
 			fmt.Printf("[Worker] Captcha detectado (%s)! Iniciando Shadow Collector...\n", ctx)
 			if err := captcha.RunShadowCollector(page, "../discovery/dataset/rotation_captcha", "scraper"); err != nil {
 				fmt.Printf("[Worker] Shadow collector falhou ou deu timeout: %v\n", err)
 			}
-			if isCaptchaPresent(page) {
+			if captcha.IsCaptchaPresent(page) {
 				if err := waitCaptchaResolution(page, 5*time.Minute); err != nil {
 					return fmt.Errorf("falha aguardando resolução manual: %w", err)
 				}
@@ -321,44 +321,6 @@ func extractDescription(page *rod.Page) string {
 	return ""
 }
 
-func isCaptchaPresent(page *rod.Page) bool {
-	info, _ := page.Info()
-	urlStr := ""
-	if info != nil {
-		urlStr = info.URL
-	}
-
-	if strings.Contains(strings.ToLower(urlStr), "verify") ||
-		strings.Contains(strings.ToLower(urlStr), "captcha") {
-		return true
-	}
-
-	// Tenta checar rápido se existe IFrame do Captcha (comum no TikTok)
-	if _, err := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"]`); err == nil {
-		return true
-	}
-
-	for _, sel := range []string{
-		".captcha_verify_container",
-		".captcha_verify_img_slide",
-		"[class*='captcha']",
-		"[class*='secsdk-captcha']",
-		"[id*='captcha']",
-		"div[class*='verify']",
-	} {
-		if _, err := page.Timeout(1 * time.Second).Element(sel); err == nil {
-			return true
-		}
-	}
-
-	// Regex Textual rápido em vez de Eval custoso
-	if _, err := page.Timeout(1*time.Second).ElementR("*", "(?i)(drag.*slider|fit.*puzzle|verify|captcha)"); err == nil {
-		return true
-	}
-
-	return false
-}
-
 // waitCaptchaResolution aguarda o captcha ser resolvido manualmente via VNC.
 func waitCaptchaResolution(page *rod.Page, timeout time.Duration) error {
 	start := time.Now()
@@ -366,7 +328,7 @@ func waitCaptchaResolution(page *rod.Page, timeout time.Duration) error {
 		if time.Since(start) > timeout {
 			return fmt.Errorf("timeout aguardando resolução do captcha")
 		}
-		if !isCaptchaPresent(page) {
+		if !captcha.IsCaptchaPresent(page) {
 			fmt.Println("[Worker] ✅ Captcha resolvido!")
 			return nil
 		}

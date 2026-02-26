@@ -14,6 +14,7 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/utils"
 	"github.com/go-rod/stealth"
+	"github.com/loviiin/project-argus/pkg/captcha"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
 )
@@ -184,9 +185,9 @@ func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, er
 		fmt.Printf("[Discovery] reload error: %v\n", err)
 	}
 	page.Timeout(15 * time.Second).WaitLoad()
-	time.Sleep(2 * time.Second)
+	time.Sleep(4 * time.Second) // Aumentado para dar tempo ao captcha lazy-load aparecer
 
-	if isCaptchaPresent(page) {
+	if captcha.IsCaptchaPresent(page) {
 		if err := s.handleCaptcha(page, query); err != nil {
 			return nil, fmt.Errorf("captcha: %w", err)
 		}
@@ -197,6 +198,22 @@ func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, er
 
 	if _, err := page.Timeout(15 * time.Second).Element(`a[href*="/video/"]`); err != nil {
 		fmt.Printf("[Discovery] nenhum video detectado ainda: %v\n", err)
+
+		// Captcha pode ter aparecido de forma lazy após a navegação — verifica novamente
+		if captcha.IsCaptchaPresent(page) {
+			fmt.Printf("[Discovery] Captcha detectado após timeout, tentando resolver...\n")
+			if err := s.handleCaptcha(page, query); err != nil {
+				return nil, fmt.Errorf("captcha (pós-wait): %w", err)
+			}
+			start = time.Now()
+			page.Timeout(15 * time.Second).WaitLoad()
+			time.Sleep(3 * time.Second)
+
+			// Segunda tentativa de esperar pelos vídeos depois do captcha
+			if _, err2 := page.Timeout(15 * time.Second).Element(`a[href*="/video/"]`); err2 != nil {
+				fmt.Printf("[Discovery] nenhum video após resolução de captcha: %v\n", err2)
+			}
+		}
 	}
 
 	// Scroll para carregar mais vídeos
@@ -298,50 +315,11 @@ func (s *Source) handleCaptcha(page *rod.Page, ctxStr string) error {
 
 	time.Sleep(3 * time.Second)
 
-	if isCaptchaPresent(page) {
+	if captcha.IsCaptchaPresent(page) {
 		return ErrCaptcha
 	}
 
 	return nil
-}
-
-func isCaptchaPresent(page *rod.Page) bool {
-	info, _ := page.Info()
-	urlStr := ""
-	if info != nil {
-		urlStr = info.URL
-	}
-
-	if strings.Contains(strings.ToLower(urlStr), "captcha") {
-		return true
-	}
-
-	if has, _, err := page.Has(`iframe[src*="captcha"]`); err == nil && has {
-		return true
-	}
-
-	strictSelectors := []string{
-		".captcha_verify_container",
-		".captcha_verify_img_slide",
-		"[class*='secsdk-captcha']",
-		"[id*='captcha']",
-		"div[class*='captcha_verify']",
-	}
-
-	if has, _, err := page.Has(strings.Join(strictSelectors, ", ")); err == nil && has {
-		return true
-	}
-
-	result, err := page.Eval(`() => {
-		const text = document.body.innerText.toLowerCase();
-		return text.includes('drag the slider') || text.includes('fit the puzzle') || text.includes('captcha');
-	}`)
-
-	if err == nil && result.Value.Bool() {
-		return true
-	}
-
-	return false
 }
 
 func unique(strSlice []string) []string {

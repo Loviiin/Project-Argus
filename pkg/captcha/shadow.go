@@ -135,7 +135,7 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 			}
 		}
 
-		if !isCaptchaPresent(page) {
+		if !IsCaptchaPresent(page) {
 			resolved = true
 			break
 		}
@@ -205,42 +205,6 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 	fmt.Println("════════════════════════════════════════════")
 
 	return nil
-}
-
-func isCaptchaPresent(page *rod.Page) bool {
-	info, _ := page.Info()
-	urlStr := ""
-	if info != nil {
-		urlStr = info.URL
-	}
-
-	if strings.Contains(strings.ToLower(urlStr), "verify") ||
-		strings.Contains(strings.ToLower(urlStr), "captcha") {
-		return true
-	}
-
-	if _, err := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"]`); err == nil {
-		return true
-	}
-
-	for _, sel := range []string{
-		".captcha_verify_container",
-		".captcha_verify_img_slide",
-		"[class*='captcha']",
-		"[class*='secsdk-captcha']",
-		"[id*='captcha']",
-		"div[class*='verify']",
-	} {
-		if _, err := page.Timeout(1 * time.Second).Element(sel); err == nil {
-			return true
-		}
-	}
-
-	if _, err := page.Timeout(1*time.Second).ElementR("*", "(?i)(drag.*slider|fit.*puzzle|verify|captcha)"); err == nil {
-		return true
-	}
-
-	return false
 }
 
 // ExtractRotateImages extrai as imagens do captcha de rotação em Base64

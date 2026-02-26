@@ -46,8 +46,8 @@ func main() {
 	})
 	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
 
-        log.Println("Inicializando driver do navegador (Discovery)...")
-        tikTokSource := sources.NewTikTokRodSource(dedupSv)
+	log.Println("Inicializando driver do navegador (Discovery)...")
+	tikTokSource := sources.NewTikTokRodSource(dedupSv)
 	svc := service.NewDiscoveryService(js, rdb, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
 
 	interval := time.Duration(cfg.Discovery.Interval) * time.Second
