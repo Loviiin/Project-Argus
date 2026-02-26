@@ -134,6 +134,25 @@ func (c *RodDiscordClient) GetInviteInfo(ctx context.Context, inviteCode string)
 			guildIcon = imgUrl; // URL completa, suporta .png/.gif/.webp
 		}
 
+		// Fallback: ícone via background-image em div (ex: TikTok scraper / headless sem og:image)
+		if (guildIcon === "") {
+			let iconEl = document.querySelector('[class*="icon"][style*="background-image"]');
+			if (!iconEl) {
+				iconEl = document.querySelector('[style*="cdn.discordapp.com/icons"]');
+			}
+			if (iconEl) {
+				let style = iconEl.getAttribute('style') || "";
+				let match = style.match(/background-image:\s*url\(['"]?(https?:\/\/cdn\.discordapp\.com\/icons\/[^\s'")?]+)/i);
+				if (match) {
+					let rawUrl = match[1];
+					let urlNoQuery = rawUrl.split('?')[0];
+					let mId = urlNoQuery.match(/icons\/(\d+)\//);
+					if (mId) guildId = mId[1];
+					guildIcon = urlNoQuery;
+				}
+			}
+		}
+
 		// Se memberCount ainda é 0, tentar buscar via <script> com estado inicial (se existir)
 		if (memberCount === 0) {
 			let scripts = document.querySelectorAll('script');

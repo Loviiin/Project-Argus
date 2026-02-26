@@ -198,7 +198,7 @@ func handleRotateCaptcha(page *rod.Page, ctxStr string) error {
 
 		time.Sleep(1 * time.Second)
 
-		if !isCaptchaPresent(page) {
+		if !captcha.IsCaptchaPresent(page) {
 			fmt.Println("🎉 [Captcha] ROTAÇÃO resolvida com sucesso!")
 			return nil
 		}
@@ -271,7 +271,7 @@ func handlePuzzleCaptcha(page *rod.Page) error {
 
 		time.Sleep(2 * time.Second)
 
-		if !isCaptchaPresent(page) {
+		if !captcha.IsCaptchaPresent(page) {
 			fmt.Printf("🎉 [Captcha] PUZZLE resolvido na tentativa %d!\n", attempt)
 			return nil
 		}
@@ -764,7 +764,7 @@ func waitCaptchaResolution(page *rod.Page, maxWait time.Duration) error {
 	fmt.Println("════════════════════════════════════════════")
 
 	for time.Now().Before(deadline) {
-		if !isCaptchaPresent(page) {
+		if !captcha.IsCaptchaPresent(page) {
 			fmt.Println("✅ [Captcha] Resolvido manualmente! Continuando automação...")
 			return nil
 		}
