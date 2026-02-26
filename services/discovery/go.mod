@@ -3,6 +3,7 @@ module discovery
 go 1.25.6
 
 require (
+	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
 	github.com/loviiin/project-argus/pkg v0.0.0-20260203143619-6a168dc9459d
@@ -10,7 +11,6 @@ require (
 )
 
 require (
-	github.com/alicebob/miniredis/v2 v2.37.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/kr/text v0.2.0 // indirect

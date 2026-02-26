@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/redis/go-redis/v9"
 )
 
 // TikTokRodSource é um wrapper para manter compatibilidade com o código existente.
@@ -12,9 +13,9 @@ type TikTokRodSource struct {
 }
 
 // NewTikTokRodSource cria uma nova instância do scraper TikTok Discovery.
-func NewTikTokRodSource(dedup *dedup.Deduplicator) *TikTokRodSource {
+func NewTikTokRodSource(dedup *dedup.Deduplicator, rdb *redis.Client) *TikTokRodSource {
 	return &TikTokRodSource{
-		source: NewSource(dedup),
+		source: NewSource(dedup, rdb),
 	}
 }
 

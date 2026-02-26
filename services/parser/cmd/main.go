@@ -296,7 +296,17 @@ func main() {
 
 		var iconURL string
 		if inviteInfo.Guild.Icon != "" {
-			iconURL = fmt.Sprintf("https://cdn.discordapp.com/icons/%s/%s.png", inviteInfo.Guild.ID, inviteInfo.Guild.Icon)
+			if strings.HasPrefix(inviteInfo.Guild.Icon, "https://") {
+				// Modo scraper: rod_client já retorna a URL completa do og:image
+				iconURL = inviteInfo.Guild.Icon
+			} else {
+				// Modo API: icon é apenas o hash, monta a URL
+				ext := "png"
+				if strings.HasPrefix(inviteInfo.Guild.Icon, "a_") {
+					ext = "gif"
+				}
+				iconURL = fmt.Sprintf("https://cdn.discordapp.com/icons/%s/%s.%s", inviteInfo.Guild.ID, inviteInfo.Guild.Icon, ext)
+			}
 		}
 
 		err = indexer.UpdateData(map[string]interface{}{

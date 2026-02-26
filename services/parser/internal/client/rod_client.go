@@ -107,6 +107,15 @@ func (c *RodDiscordClient) GetInviteInfo(ctx context.Context, inviteCode string)
 			}
 		}
 
+		let metaDesc = document.querySelector('meta[property="og:description"]');
+		if (metaDesc && metaDesc.content && memberCount === 0) {
+			// Extract from description like "Check out the ServerName community on Discord - hang out with 870 other members..."
+			let match = metaDesc.content.match(/(?:with|com)\s+([\d.,]+)\s+(?:other members|outros membros)/i);
+			if (match) {
+				memberCount = parseInt(match[1].replace(/[,.]/g, ''));
+			}
+		}
+
 		let metaTitle = document.querySelector('meta[property="og:title"]');
 		if (metaTitle && metaTitle.content) {
 			let fallbackName = metaTitle.content.replace("Join the ", "").replace(" Discord Server!", "").trim();
@@ -114,21 +123,37 @@ func (c *RodDiscordClient) GetInviteInfo(ctx context.Context, inviteCode string)
 			
 			if (guildName === "") guildName = fallbackName;
 		}
-		
-		let metaDesc = document.querySelector('meta[property="og:description"]');
-		if (metaDesc && metaDesc.content && memberCount === 0) {
-			let match = metaDesc.content.match(/(?:with|com)\s+([\d.,]+)\s+(?:other members|outros membros)/i);
-			if (match) {
-				memberCount = parseInt(match[1].replace(/[,.]/g, ''));
-			}
-		}
 
 		let metaImg = document.querySelector('meta[property="og:image"]');
 		if (metaImg && metaImg.content) {
-			let m = metaImg.content.match(/icons\/(\d+)\/([a-zA-Z0-9_]+)\./);
-			if (m) {
-				guildId = m[1];
-				guildIcon = m[2];
+			let imgUrl = metaImg.content.split('?')[0]; // strip query params
+			let mId = imgUrl.match(/icons\/(\d+)\//);
+			if (mId) {
+				guildId = mId[1];
+			}
+			guildIcon = imgUrl; // URL completa, suporta .png/.gif/.webp
+		}
+
+		// Se memberCount ainda é 0, tentar buscar via <script> com estado inicial (se existir)
+		if (memberCount === 0) {
+			let scripts = document.querySelectorAll('script');
+			for(let s of scripts) {
+				if(s.innerHTML && s.innerHTML.includes('approximate_member_count')) {
+					let match = s.innerHTML.match(/"approximate_member_count":\s*(\d+)/);
+					if(match) {
+						memberCount = parseInt(match[1]);
+						break;
+					}
+				}
+			}
+		}
+
+		// Fallback final: regex solto no texto bruto do HTML, útil pro headless
+		if (memberCount === 0) {
+			let bodyText = document.body.innerText || "";
+			let match = bodyText.match(/([\d.,]+)\s+(Members|Membros)/i);
+			if (match) {
+				memberCount = parseInt(match[1].replace(/[,.]/g, ''));
 			}
 		}
 

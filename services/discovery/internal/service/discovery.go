@@ -9,6 +9,7 @@ import (
 	"discovery/internal/sources"
 
 	"github.com/nats-io/nats.go"
+	"github.com/redis/go-redis/v9"
 )
 
 // ScrapeJob é o payload publicado no tópico jobs.scrape.
@@ -21,16 +22,18 @@ type ScrapeJob struct {
 
 type DiscoveryService struct {
 	js          nats.JetStreamContext
+	rdb         *redis.Client
 	sources     []sources.Source
 	concurrency int
 }
 
-func NewDiscoveryService(js nats.JetStreamContext, srcs []sources.Source, workers int) *DiscoveryService {
+func NewDiscoveryService(js nats.JetStreamContext, rdb *redis.Client, srcs []sources.Source, workers int) *DiscoveryService {
 	if workers <= 0 {
 		workers = 1
 	}
 	return &DiscoveryService{
 		js:          js,
+		rdb:         rdb,
 		sources:     srcs,
 		concurrency: workers,
 	}
@@ -111,8 +114,10 @@ func (s *DiscoveryService) Run(hashtags []string) {
 					_, err = s.js.Publish("jobs.scrape", data)
 					if err != nil {
 						log.Printf("[%s] erro publicar job %s: %v", tag, v.ID, err)
+						s.rdb.Incr(ctx, "argus:metrics:discovery:failed")
 					} else {
 						log.Printf("[%s] ✅ job publicado: %s → jobs.scrape", tag, v.ID)
+						s.rdb.Incr(ctx, "argus:metrics:discovery:enqueued")
 					}
 				}
 			}(tag)

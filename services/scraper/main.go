@@ -25,6 +25,9 @@ func main() {
 
 	fmt.Println("Argus Scraper Worker (Subscriber) iniciando...")
 
+	// Inicia rotina do Garbage Collector de perfis no background
+	go worker.StartProfileSweeper()
+
 	// --- NATS ---
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {
