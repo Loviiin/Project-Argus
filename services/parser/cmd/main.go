@@ -25,6 +25,7 @@ import (
 	"parser/internal/search"
 
 	"github.com/loviiin/project-argus/pkg/config"
+	"github.com/loviiin/project-argus/pkg/dedup"
 )
 
 func main() {
@@ -53,6 +54,9 @@ func main() {
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		log.Fatalf("Erro fatal: Redis não responde em %s: %v", cfg.Redis.Address, err)
 	}
+
+	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
+	defer dedupSv.Close()
 
 	js, _ := nc.JetStream()
 
@@ -92,20 +96,19 @@ func main() {
 		cleanPath := strings.TrimSpace(payload.SourcePath)
 		hash := md5.Sum([]byte(cleanPath))
 		hashStr := hex.EncodeToString(hash[:])
-		idempotencyKey := fmt.Sprintf("argus:processed_job:fast_ingestion:%s", hashStr)
 
 		// 1. Worker Heartbeat/Processing Lock
 		lockKey := fmt.Sprintf("argus:processing_lock:fast_ingestion:%s", hashStr)
-		if locked, _ := rdb.SetNX(context.Background(), lockKey, "1", 10*time.Minute).Result(); !locked {
+		if locked, _ := dedupSv.RDB().SetNX(context.Background(), lockKey, "1", 10*time.Minute).Result(); !locked {
 			delay := time.Duration(30+rand.Intn(30)) * time.Second
 			log.Printf("[Fast Ingestion] Job %s bloqueado por lock. Nak + Jitter: %v", hashStr, delay)
 			msg.NakWithDelay(delay)
 			return
 		}
-		defer rdb.Del(context.Background(), lockKey)
+		defer dedupSv.RDB().Del(context.Background(), lockKey)
 
-		exists, err := rdb.Exists(context.Background(), idempotencyKey).Result()
-		if err == nil && exists > 0 {
+		processed, err := dedupSv.CheckIfProcessed(context.Background(), "processed_job", "fast_ingestion:"+hashStr)
+		if err == nil && processed {
 			log.Printf("[Fast Ingestion] Mensagem duplicada ignorada: %s", hashStr)
 			msg.Ack()
 			return
@@ -166,10 +169,13 @@ func main() {
 					return
 				}
 
+				loc, _ := time.LoadLocation("America/Sao_Paulo")
+				nowSP := time.Now().In(loc)
+
 				err = indexer.IndexData(map[string]interface{}{
 					"invite_code":         inviteCode,
 					"source_url":          payload.SourcePath,
-					"timestamp_formatted": time.Now().Format("02/01/2006 15:04:05"),
+					"timestamp_formatted": nowSP.Format("02/01/2006 15:04:05"),
 					"status":              "pending",
 				})
 				if err != nil {
@@ -188,7 +194,7 @@ func main() {
 		}
 
 		// Sucesso: Grava chave idempotencia e Ack
-		rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
+		dedupSv.MarkAsSeen(context.Background(), "processed_job", "fast_ingestion:"+hashStr)
 		msg.Ack()
 	}, nats.Durable("parser-fast-ingestion"), nats.DeliverAll(), nats.InactiveThreshold(30*time.Second), nats.ManualAck())
 
@@ -213,20 +219,18 @@ func main() {
 			return
 		}
 
-		idempotencyKey := fmt.Sprintf("argus:processed_job:%s", job.InviteCode)
-
 		// 1. Worker Heartbeat/Processing Lock
 		lockKey := fmt.Sprintf("argus:processing_lock:%s", job.InviteCode)
-		if locked, _ := rdb.SetNX(context.Background(), lockKey, "1", 10*time.Minute).Result(); !locked {
+		if locked, _ := dedupSv.RDB().SetNX(context.Background(), lockKey, "1", 10*time.Minute).Result(); !locked {
 			delay := time.Duration(30+rand.Intn(30)) * time.Second
 			log.Printf("[Enricher] Job %s bloqueado por lock. Nak + Jitter: %v", job.InviteCode, delay)
 			msg.NakWithDelay(delay)
 			return
 		}
-		defer rdb.Del(context.Background(), lockKey)
+		defer dedupSv.RDB().Del(context.Background(), lockKey)
 
-		exists, err := rdb.Exists(context.Background(), idempotencyKey).Result()
-		if err == nil && exists > 0 {
+		processed, err := dedupSv.CheckIfProcessed(context.Background(), "processed_job", job.InviteCode)
+		if err == nil && processed {
 			log.Printf("[Enricher] Mensagem duplicada ignorada: %s", job.InviteCode)
 			msg.Ack()
 			return
@@ -250,7 +254,7 @@ func main() {
 		if existingDoc, err := indexer.GetDocument(job.InviteCode); err == nil {
 			if existingDoc.ServerName != "" && existingDoc.Icon != "" {
 				fmt.Printf("[Enricher] ⏭️ Skiped: %s já enriquecido (%s). Poupando a API.\n", job.InviteCode, existingDoc.ServerName)
-				rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
+				dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
 				msg.Ack()
 				return
 			}
@@ -275,7 +279,7 @@ func main() {
 				})
 				repo.UpdateEnrichedData(context.Background(), job.InviteCode, "", "", "", 0, "expired")
 
-				rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
+				dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
 				msg.Ack()
 				return
 			}
@@ -292,7 +296,17 @@ func main() {
 
 		var iconURL string
 		if inviteInfo.Guild.Icon != "" {
-			iconURL = fmt.Sprintf("https://cdn.discordapp.com/icons/%s/%s.png", inviteInfo.Guild.ID, inviteInfo.Guild.Icon)
+			if strings.HasPrefix(inviteInfo.Guild.Icon, "https://") {
+				// Modo scraper: rod_client já retorna a URL completa do og:image
+				iconURL = inviteInfo.Guild.Icon
+			} else {
+				// Modo API: icon é apenas o hash, monta a URL
+				ext := "png"
+				if strings.HasPrefix(inviteInfo.Guild.Icon, "a_") {
+					ext = "gif"
+				}
+				iconURL = fmt.Sprintf("https://cdn.discordapp.com/icons/%s/%s.%s", inviteInfo.Guild.ID, inviteInfo.Guild.Icon, ext)
+			}
 		}
 
 		err = indexer.UpdateData(map[string]interface{}{
@@ -316,7 +330,7 @@ func main() {
 			return
 		}
 
-		rdb.Set(context.Background(), idempotencyKey, "1", 7*24*60*60*time.Second)
+		dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
 		msg.Ack()
 	}, nats.Durable("discord-enricher"), nats.DeliverAll(), nats.ManualAck())
 

@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/repository"
-
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/utils"
 	"github.com/go-rod/stealth"
 	"github.com/loviiin/project-argus/pkg/config"
+	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -29,7 +29,8 @@ const (
 type Source struct {
 	browser  *rod.Browser
 	launcher *launcher.Launcher
-	dedup    *repository.Deduplicator
+	dedup    *dedup.Deduplicator
+	rdb      *redis.Client
 }
 
 const maxVideos = 150
@@ -37,7 +38,7 @@ const maxVideos = 150
 // NewSource cria uma nova instância do TikTok discovery source.
 // O browser persiste sessão em ./browser_state_discovery para manter cookies/tokens
 // e evitar captchas repetidos na página da hashtag.
-func NewSource(dedup *repository.Deduplicator) *Source {
+func NewSource(dedup *dedup.Deduplicator, rdb *redis.Client) *Source {
 	userDataDir := "./browser_state_discovery"
 
 	// Cleanup stale lock files that often cause "Failed to get the debug url"
@@ -108,7 +109,7 @@ func NewSource(dedup *repository.Deduplicator) *Source {
 		browser.ServeMonitor(":9222")
 	}()
 
-	return &Source{browser: browser, launcher: l, dedup: dedup}
+	return &Source{browser: browser, launcher: l, dedup: dedup, rdb: rdb}
 }
 
 func (s *Source) Name() string {
@@ -143,17 +144,31 @@ func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, er
 	}
 	defer page.Close()
 
+	// Watchdog timeout para prevenir memory/tab leaks
+	// Força o fechamento da aba se o rod travar em alguma operação síncrona
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Minute):
+			fmt.Printf("[Discovery] 🚨 Watchdog: Timeout estrito de 5m atingido. Forçando encerramento da aba para %s!\n", query)
+			page.Close()
+		}
+	}()
+
 	start := time.Now()
 
 	// Se a query já é uma URL direta de vídeo, retorna diretamente (sem filtro Redis aqui)
 	if strings.Contains(query, "tiktok.com") && strings.Contains(query, "/video/") {
 		videoID := extractID(query)
-		isNew, err := s.dedup.IsNew(ctx, videoID)
+		isProcessed, err := s.dedup.CheckIfProcessed(ctx, "processed_job", videoID)
 		if err != nil {
 			return nil, fmt.Errorf("erro redis para %s: %w", videoID, err)
 		}
-		if !isNew {
+		if isProcessed {
 			fmt.Printf("[Discovery] skip (já visto): %s\n", videoID)
+			s.rdb.Incr(ctx, "argus:metrics:discovery:duplicates")
 			return nil, nil
 		}
 		return []DiscoveredVideo{{ID: videoID, URL: query}}, nil
@@ -220,13 +235,14 @@ func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, er
 			continue
 		}
 
-		isNew, err := s.dedup.IsNew(ctx, videoID)
+		isProcessed, err := s.dedup.CheckIfProcessed(ctx, "processed_job", videoID)
 		if err != nil {
 			fmt.Printf("[Discovery] erro redis para %s: %v\n", videoID, err)
 			continue
 		}
-		if !isNew {
+		if isProcessed {
 			fmt.Printf("[Discovery] skip (já visto): %s\n", videoID)
+			s.rdb.Incr(ctx, "argus:metrics:discovery:duplicates")
 			continue
 		}
 

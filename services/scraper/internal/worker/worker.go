@@ -49,7 +49,7 @@ type TikTokAPIResponse struct {
 
 const (
 	perVideoTimeout     = 20 * time.Second
-	MaxCommentsPerVideo = 100 // Limita o numero maximo de comentários para não travar em vídeos virais
+	MaxCommentsPerVideo = 200 // Limita o numero maximo de comentários para não travar em vídeos virais
 )
 
 // ProcessVideo abre a página de um vídeo, intercepta a API de comentários,
@@ -61,13 +61,30 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 	}
 	defer page.Close()
 
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(8 * time.Minute):
+			fmt.Printf("[Worker] 🚨 Watchdog: Timeout estrito de 8m atingido. Forçando encerramento da aba para %s!\n", job.VideoID)
+			page.Close()
+		}
+	}()
+
 	router := page.HijackRequests()
+	defer router.Stop()
+
+	// Cliente HTTP com timeout para evitar que LoadResponse bloqueie para sempre as rotinas do router
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 
 	var mu sync.Mutex
 	var capturedComments []RawComment
 
 	router.MustAdd("*/comment/list/*", func(ctx *rod.Hijack) {
-		err := ctx.LoadResponse(http.DefaultClient, true)
+		err := ctx.LoadResponse(httpClient, true)
 		if err != nil {
 			return
 		}
@@ -89,7 +106,7 @@ func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error)
 	})
 
 	router.MustAdd("*/comment/reply/list/*", func(ctx *rod.Hijack) {
-		err := ctx.LoadResponse(http.DefaultClient, true)
+		err := ctx.LoadResponse(httpClient, true)
 		if err != nil {
 			return
 		}

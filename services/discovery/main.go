@@ -8,12 +8,14 @@ import (
 	"syscall"
 	"time"
 
-	"discovery/internal/repository"
 	"discovery/internal/service"
 	"discovery/internal/sources"
 
 	"github.com/loviiin/project-argus/pkg/config"
+	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/loviiin/project-argus/pkg/metrics"
 	"github.com/nats-io/nats.go"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -37,11 +39,17 @@ func main() {
 	}
 	log.Println("Stream SCRAPE (jobs.scrape) pronto")
 
-	dedup := repository.NewDeduplicator(cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
-	log.Println("Inicializando driver do navegador (Discovery)...")
-	tikTokSource := sources.NewTikTokRodSource(dedup)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
 
-	svc := service.NewDiscoveryService(js, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
+	log.Println("Inicializando driver do navegador (Discovery)...")
+	tikTokSource := sources.NewTikTokRodSource(dedupSv, rdb)
+
+	svc := service.NewDiscoveryService(js, rdb, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
 
 	interval := time.Duration(cfg.Discovery.Interval) * time.Second
 	if interval == 0 {
@@ -56,6 +64,13 @@ func main() {
 	}
 
 	go cycle()
+
+	discoveryMetrics := []metrics.MetricDef{
+		{RedisKey: "argus:metrics:discovery:enqueued", PromName: "argus_discovery_enqueued_total", Help: "Total de videos enfileirados com sucesso", Type: "counter"},
+		{RedisKey: "argus:metrics:discovery:duplicates", PromName: "argus_discovery_duplicates_total", Help: "Total de videos ignorados por duplicata", Type: "counter"},
+		{RedisKey: "argus:metrics:discovery:failed", PromName: "argus_discovery_failed_total", Help: "Total de falhas criticas de processamento/publish", Type: "counter"},
+	}
+	go metrics.StartMetricsServer(":8081", rdb, discoveryMetrics)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

@@ -40,6 +40,7 @@ type Config struct {
 		Address  string `yaml:"address"`
 		Password string `yaml:"password"`
 		DB       int    `yaml:"db"`
+		TTLHours int    `yaml:"ttl_hours"`
 	} `yaml:"redis"`
 
 	Database struct {
