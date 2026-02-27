@@ -93,10 +93,10 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 
 	deadline := time.Now().Add(maxWait)
 
-	var dWindow []float64 // fallback: últimos dWindowSize valores válidos de D
-	var frozenD float64   // posição congelada no momento do release detectado
+	var dWindow []float64  // fallback: últimos dWindowSize valores válidos de D
+	var frozenD float64    // posição congelada no momento do release detectado
 	var prevD float64 = -1 // último D lido para calcular delta (sentinela: -1)
-	var stableCount int   // contador de polls consecutivos com D estável
+	var stableCount int    // contador de polls consecutivos com D estável
 	var lastLs, lastLi float64
 	logTicker := time.Now()
 
