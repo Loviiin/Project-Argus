@@ -95,7 +95,7 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 
 	var dWindow []float64 // fallback: últimos dWindowSize valores válidos de D
 	var frozenD float64   // posição congelada no momento do release detectado
-	var prevD float64     // último D lido para calcular delta
+	var prevD float64 = -1 // último D lido para calcular delta (sentinela: -1)
 	var stableCount int   // contador de polls consecutivos com D estável
 	var lastLs, lastLi float64
 	logTicker := time.Now()
@@ -166,10 +166,10 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 					if delta < 0 {
 						delta = -delta
 					}
-					// snap.D > lastLi*0.1 garante que só contamos estabilidade quando
-					// o slider já avançou pelo menos 10% da largura do ícone.
+					// snap.D > lastLi*0.15 garante que só contamos estabilidade quando
+					// o slider já avançou pelo menos 15% da largura do ícone.
 					// Isso evita congelar D durante a pausa antes de começar a arrastar.
-					if prevD > 0 && snap.D > lastLi*0.1 && delta <= stabilityThresholdPx {
+					if prevD >= 0 && snap.D > (lastLi*0.15) && delta <= stabilityThresholdPx {
 						stableCount++
 						if stableCount >= stabilityRequired {
 							frozenD = snap.D
@@ -185,33 +185,9 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 		}
 
 		if !IsCaptchaPresent(page) {
-			// Se o DOM sumiu antes de detectarmos o release por estabilidade,
-			// tenta mais 6 polls extras (~300ms) para capturar D enquanto o
-			// slider ainda pode estar visível no DOM.
-			// Caso o slider suma junto com o captcha, esses polls retornam
-			// snap.D == 0 e o fallback median é usado — comportamento correto.
-			if frozenD == 0 {
-				const extraPolls = 6
-				for i := 0; i < extraPolls; i++ {
-					time.Sleep(pollInterval)
-					if result, err := captchaPage.Eval(sliderJS); err == nil && result.Value.Str() != "" {
-						var snap struct {
-							D  float64 `json:"d"`
-							Ls float64 `json:"ls"`
-							Li float64 `json:"li"`
-						}
-						if json.Unmarshal([]byte(result.Value.Str()), &snap) == nil && snap.D > 0 {
-							dWindow = append(dWindow, snap.D)
-							if len(dWindow) > dWindowSize {
-								dWindow = dWindow[len(dWindow)-dWindowSize:]
-							}
-							lastLs, lastLi = snap.Ls, snap.Li
-						}
-					}
-				}
-				fmt.Printf("⚠️  [Shadow] DOM sumiu antes do freeze — coletados %d polls extras (dWindow len=%d)\n",
-					extraPolls, len(dWindow))
-			}
+			// Confirmado empiricamente: o slider desaparece instantaneamente com o DOM.
+			// Polls extras retornam snap.D = 0 e poluem a dWindow, corrompendo o fallback.
+			// Removido: qualquer tentativa de coletar dados após DOM sumir.
 			resolved = true
 			break
 		}
@@ -253,8 +229,11 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 		dSource = "frozen@release"
 	} else {
 		d = medianFloat64(dWindow)
+		fmt.Printf("⚠️  [Shadow] FALLBACK: frozenD não detectado antes do DOM sumir. "+
+			"Usando mediana de %d amostras (d=%.2f). "+
+			"Considere aumentar stabilityRequired se isso ocorrer frequentemente.\n",
+			len(dWindow), d)
 		dSource = fmt.Sprintf("median(%d amostras)", len(dWindow))
-		fmt.Printf("⚠️  [Shadow] Release não detectado antes do DOM sumir — usando %s\n", dSource)
 	}
 	ls := lastLs
 	li := lastLi
