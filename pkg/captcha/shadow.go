@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,10 +77,27 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 	}
 
 	const maxWait = 5 * time.Minute
-	const pollInterval = 500 * time.Millisecond
+	// Polling agressivo: 50ms para minimizar lag do VNC entre a posição
+	// real do slider e o snapshot capturado.
+	const pollInterval = 50 * time.Millisecond
+	const dWindowSize = 5
+
+	// Detecção de estabilidade: quando D para de mudar por stabilityRequired
+	// polls consecutivos, o usuário soltou o slider. Congelamos D nesse
+	// instante — antes do captcha desaparecer do DOM.
+	const stabilityThresholdPx = 1.5 // delta máximo (px) para considerar "parado"
+	// 8 polls × 50ms = ~400ms de estabilidade para confirmar release.
+	// 4 era pouco: uma pausa momentânea durante o arrasto pode durar 200ms
+	// e acionar o freeze no lugar errado. Pausas reais raramente passam de 200ms.
+	const stabilityRequired = 8
+
 	deadline := time.Now().Add(maxWait)
 
-	var lastD, lastLs, lastLi float64
+	var dWindow []float64 // fallback: últimos dWindowSize valores válidos de D
+	var frozenD float64   // posição congelada no momento do release detectado
+	var prevD float64     // último D lido para calcular delta
+	var stableCount int   // contador de polls consecutivos com D estável
+	var lastLs, lastLi float64
 	logTicker := time.Now()
 
 	const sliderJS = `() => {
@@ -131,18 +149,85 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 				Li float64 `json:"li"`
 			}
 			if json.Unmarshal([]byte(result.Value.Str()), &snap) == nil && snap.D > 0 {
-				lastD, lastLs, lastLi = snap.D, snap.Ls, snap.Li
+				lastLs, lastLi = snap.Ls, snap.Li
+
+				// Fallback window — mantém os últimos N leituras
+				dWindow = append(dWindow, snap.D)
+				if len(dWindow) > dWindowSize {
+					dWindow = dWindow[len(dWindow)-dWindowSize:]
+				}
+
+				// Detecção de release por estabilidade:
+				// enquanto o usuário arrasta, D muda a cada poll.
+				// Quando solta, D fica constante — detectamos isso aqui
+				// e congelamos antes do DOM desaparecer.
+				if frozenD == 0 {
+					delta := snap.D - prevD
+					if delta < 0 {
+						delta = -delta
+					}
+					// snap.D > lastLi*0.1 garante que só contamos estabilidade quando
+					// o slider já avançou pelo menos 10% da largura do ícone.
+					// Isso evita congelar D durante a pausa antes de começar a arrastar.
+					if prevD > 0 && snap.D > lastLi*0.1 && delta <= stabilityThresholdPx {
+						stableCount++
+						if stableCount >= stabilityRequired {
+							frozenD = snap.D
+							fmt.Printf("🔒 [Shadow] Release detectado por estabilidade: D=%.2f (após %d polls estáveis)\n",
+								frozenD, stableCount)
+						}
+					} else {
+						stableCount = 0 // reset: slider em movimento ou ainda no início
+					}
+					prevD = snap.D
+				}
 			}
 		}
 
 		if !IsCaptchaPresent(page) {
+			// Se o DOM sumiu antes de detectarmos o release por estabilidade,
+			// tenta mais 6 polls extras (~300ms) para capturar D enquanto o
+			// slider ainda pode estar visível no DOM.
+			// Caso o slider suma junto com o captcha, esses polls retornam
+			// snap.D == 0 e o fallback median é usado — comportamento correto.
+			if frozenD == 0 {
+				const extraPolls = 6
+				for i := 0; i < extraPolls; i++ {
+					time.Sleep(pollInterval)
+					if result, err := captchaPage.Eval(sliderJS); err == nil && result.Value.Str() != "" {
+						var snap struct {
+							D  float64 `json:"d"`
+							Ls float64 `json:"ls"`
+							Li float64 `json:"li"`
+						}
+						if json.Unmarshal([]byte(result.Value.Str()), &snap) == nil && snap.D > 0 {
+							dWindow = append(dWindow, snap.D)
+							if len(dWindow) > dWindowSize {
+								dWindow = dWindow[len(dWindow)-dWindowSize:]
+							}
+							lastLs, lastLi = snap.Ls, snap.Li
+						}
+					}
+				}
+				fmt.Printf("⚠️  [Shadow] DOM sumiu antes do freeze — coletados %d polls extras (dWindow len=%d)\n",
+					extraPolls, len(dWindow))
+			}
 			resolved = true
 			break
 		}
 
 		if time.Since(logTicker) >= 5*time.Second {
 			remaining := time.Until(deadline).Round(time.Second)
-			fmt.Printf("⏳ [Shadow] Aguardando resolução... (%s restantes, lastD=%.1f)\n", remaining, lastD)
+			var latestD float64
+			if len(dWindow) > 0 {
+				latestD = dWindow[len(dWindow)-1]
+			}
+			if frozenD > 0 {
+				fmt.Printf("⏳ [Shadow] Aguardando DOM... (%s restantes, frozenD=%.1f 🔒)\n", remaining, frozenD)
+			} else {
+				fmt.Printf("⏳ [Shadow] Aguardando resolução... (%s restantes, D=%.1f, estável=%d/%d)\n",
+					remaining, latestD, stableCount, stabilityRequired)
+			}
 			logTicker = time.Now()
 		}
 
@@ -157,11 +242,24 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 
 	fmt.Println("✅ [Shadow] Captcha resolvido!")
 
-	d := lastD
+	// Prioridade 1: posição congelada no momento em que D estabilizou
+	// (slider solto) — capturada antes do DOM desaparecer.
+	// Prioridade 2: mediana da janela deslizante como fallback se o
+	// captcha desapareceu antes de detectarmos estabilidade (raro).
+	var d float64
+	var dSource string
+	if frozenD > 0 {
+		d = frozenD
+		dSource = "frozen@release"
+	} else {
+		d = medianFloat64(dWindow)
+		dSource = fmt.Sprintf("median(%d amostras)", len(dWindow))
+		fmt.Printf("⚠️  [Shadow] Release não detectado antes do DOM sumir — usando %s\n", dSource)
+	}
 	ls := lastLs
 	li := lastLi
 
-	fmt.Printf("📐 [Shadow] Metadados (último snapshot): d=%.2f, l_s=%.2f, l_i=%.2f\n", d, ls, li)
+	fmt.Printf("📐 [Shadow] Metadados (%s): d=%.2f, l_s=%.2f, l_i=%.2f\n", dSource, d, ls, li)
 
 	if d <= 0 || ls <= 0 || li <= 0 || ls <= li {
 		fmt.Printf("❌ [Shadow] Metadados inválidos (d=%.2f, ls=%.2f, li=%.2f) — descartando.\n", d, ls, li)
@@ -344,6 +442,22 @@ func saveBase64Image(b64, path string) error {
 		return fmt.Errorf("erro decodificando base64: %w", err)
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// medianFloat64 retorna a mediana de uma slice de float64.
+// Retorna 0 se a slice estiver vazia.
+func medianFloat64(vals []float64) float64 {
+	n := len(vals)
+	if n == 0 {
+		return 0
+	}
+	tmp := make([]float64, n)
+	copy(tmp, vals)
+	sort.Float64s(tmp)
+	if n%2 == 1 {
+		return tmp[n/2]
+	}
+	return (tmp[n/2-1] + tmp[n/2]) / 2.0
 }
 
 func cleanupShadowFiles(id, dir string) {
