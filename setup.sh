@@ -85,7 +85,7 @@ if ! grep -q "/usr/local/go/bin" ~/.bashrc; then
 fi
 export PATH=$PATH:/usr/local/go/bin
 
-wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+echo "=== 🌐 Instalando Google Chrome ==="
 wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 sudo apt install -y ./google-chrome-stable_current_amd64.deb
 rm google-chrome-stable_current_amd64.deb
@@ -103,7 +103,7 @@ pip install --upgrade pip
 pip install -r services/vision/requirements.txt
 deactivate
 
-if ! command -v docker &> /dev/null; then
+echo "=== 🐳 Instalando Docker ==="
 if ! command -v docker &> /dev/null; then
     sudo apt install -y docker.io docker-compose-v2
     sudo usermod -aG docker $USER
@@ -111,6 +111,7 @@ else
     echo "Docker já instalado."
 fi
 
+echo ""
 echo "════════════════════════════════════════════"
 echo "✅ Setup Concluído!"
 echo ""
