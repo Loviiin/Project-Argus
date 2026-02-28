@@ -98,6 +98,7 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 	var prevD float64 = -1 // último D lido para calcular delta (sentinela: -1)
 	var stableCount int    // contador de polls consecutivos com D estável
 	var lastLs, lastLi float64
+	var userStartedDragging bool
 	logTicker := time.Now()
 
 	const sliderJS = `() => {
@@ -149,42 +150,69 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 				Li float64 `json:"li"`
 			}
 			if json.Unmarshal([]byte(result.Value.Str()), &snap) == nil && snap.D > 0 {
-				lastLs, lastLi = snap.Ls, snap.Li
-
-				// Fallback window — mantém os últimos N leituras
-				dWindow = append(dWindow, snap.D)
-				if len(dWindow) > dWindowSize {
-					dWindow = dWindow[len(dWindow)-dWindowSize:]
+				if snap.Ls > 0 {
+					lastLs = snap.Ls
+				}
+				if snap.Li > 0 {
+					lastLi = snap.Li
 				}
 
-				// Detecção de release por estabilidade:
-				// enquanto o usuário arrasta, D muda a cada poll.
-				// Quando solta, D fica constante — detectamos isso aqui
-				// e congelamos antes do DOM desaparecer.
-				if frozenD == 0 {
-					delta := snap.D - prevD
-					if delta < 0 {
-						delta = -delta
+				if lastLi > 0 && snap.D > lastLi*0.3 {
+					userStartedDragging = true
+				}
+
+				if userStartedDragging {
+					// Fallback window — mantém os últimos N leituras
+					dWindow = append(dWindow, snap.D)
+					if len(dWindow) > dWindowSize {
+						dWindow = dWindow[len(dWindow)-dWindowSize:]
 					}
-					// snap.D > lastLi*0.15 garante que só contamos estabilidade quando
-					// o slider já avançou pelo menos 15% da largura do ícone.
-					// Isso evita congelar D durante a pausa antes de começar a arrastar.
-					if prevD >= 0 && snap.D > (lastLi*0.15) && delta <= stabilityThresholdPx {
-						stableCount++
-						if stableCount >= stabilityRequired {
-							frozenD = snap.D
-							fmt.Printf("🔒 [Shadow] Release detectado por estabilidade: D=%.2f (após %d polls estáveis)\n",
-								frozenD, stableCount)
+
+					// Se já temos frozenD mas D mudou significativamente,
+					// usuário voltou a arrastar — reseta o freeze
+					if frozenD > 0 {
+						diff := snap.D - frozenD
+						if diff < 0 {
+							diff = -diff
 						}
-					} else {
-						stableCount = 0 // reset: slider em movimento ou ainda no início
+						if diff > stabilityThresholdPx*3 {
+							fmt.Printf("🔓 [Shadow] Freeze resetado — usuário voltou a arrastar "+
+								"(D=%.2f vs frozenD=%.2f)\n", snap.D, frozenD)
+							frozenD = 0
+							stableCount = 0
+							prevD = snap.D
+						}
 					}
-					prevD = snap.D
+
+					// Detecção de release por estabilidade:
+					// enquanto o usuário arrasta, D muda a cada poll.
+					// Quando solta, D fica constante — detectamos isso aqui
+					// e congelamos antes do DOM desaparecer.
+					if frozenD == 0 {
+						delta := snap.D - prevD
+						if delta < 0 {
+							delta = -delta
+						}
+						// snap.D > lastLi*0.15 garante que só contamos estabilidade quando
+						// o slider já avançou pelo menos 15% da largura do ícone.
+						// Isso evita congelar D durante a pausa antes de começar a arrastar.
+						if prevD >= 0 && snap.D > (lastLi*0.15) && delta <= stabilityThresholdPx {
+							stableCount++
+							if stableCount >= stabilityRequired {
+								frozenD = snap.D
+								fmt.Printf("🔒 [Shadow] Release detectado por estabilidade: D=%.2f (após %d polls estáveis)\n",
+									frozenD, stableCount)
+							}
+						} else {
+							stableCount = 0 // reset: slider em movimento ou ainda no início
+						}
+						prevD = snap.D
+					}
 				}
 			}
 		}
 
-		if !IsCaptchaPresent(page) {
+		if !IsCaptchaPresent(captchaPage) {
 			// Confirmado empiricamente: o slider desaparece instantaneamente com o DOM.
 			// Polls extras retornam snap.D = 0 e poluem a dWindow, corrompendo o fallback.
 			// Removido: qualquer tentativa de coletar dados após DOM sumir.
@@ -200,6 +228,8 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 			}
 			if frozenD > 0 {
 				fmt.Printf("⏳ [Shadow] Aguardando DOM... (%s restantes, frozenD=%.1f 🔒)\n", remaining, frozenD)
+			} else if !userStartedDragging {
+				fmt.Printf("⏳ [Shadow] Aguardando início do arrasto... (%s restantes, D=%.1f)\n", remaining, latestD)
 			} else {
 				fmt.Printf("⏳ [Shadow] Aguardando resolução... (%s restantes, D=%.1f, estável=%d/%d)\n",
 					remaining, latestD, stableCount, stabilityRequired)

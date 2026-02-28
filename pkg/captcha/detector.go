@@ -2,12 +2,11 @@ package captcha
 
 import (
 	"strings"
-	"time"
 
 	"github.com/go-rod/rod"
 )
 
-// IsCaptchaPresent verifica se um captcha está presente na página.
+// IsCaptchaPresent verifica se um captcha está presente na página de forma não-bloqueante.
 func IsCaptchaPresent(page *rod.Page) bool {
 	info, _ := page.Info()
 	urlStr := ""
@@ -20,8 +19,8 @@ func IsCaptchaPresent(page *rod.Page) bool {
 		return true
 	}
 
-	// Tenta checar rápido se existe IFrame do Captcha (comum no TikTok)
-	if _, err := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"]`); err == nil {
+	// Tenta checar rápido se existe IFrame do Captcha (comum no TikTok) - Não bloqueante
+	if els, err := page.Elements(`iframe[src*="captcha"]`); err == nil && len(els) > 0 {
 		return true
 	}
 
@@ -33,13 +32,14 @@ func IsCaptchaPresent(page *rod.Page) bool {
 		"[id*='captcha']",
 		"div[class*='verify']",
 	} {
-		if _, err := page.Timeout(1 * time.Second).Element(sel); err == nil {
+		if els, err := page.Elements(sel); err == nil && len(els) > 0 {
 			return true
 		}
 	}
 
-	// Regex textual rápido em vez de Eval custoso
-	if _, err := page.Timeout(1 * time.Second).ElementR("*", "(?i)(drag.*slider|fit.*puzzle|verify|captcha)"); err == nil {
+	// Regex textual rápido usando Eval (instantâneo) em vez de percorrer toda a árvore com ElementR
+	res, err := page.Eval(`() => document.body && /drag.*slider|fit.*puzzle|verify|captcha/i.test(document.body.innerText)`)
+	if err == nil && res.Value.Bool() {
 		return true
 	}
 
