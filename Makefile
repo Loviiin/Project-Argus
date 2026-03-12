@@ -57,8 +57,12 @@ clean-workers: ## Limpa travas (locks) e processos presos do Chromium dos worker
 
 # --- Setup & Dependencies ---
 
-setup: setup-go setup-discovery setup-python ## Instala dependências de todos os serviços
+setup: setup-go setup-discovery setup-python setup-onnx ## Instala dependências de todos os serviços
 	@echo "Setup concluído!"
+
+setup-onnx:
+	@echo "Baixando dependências do ONNX Runtime..."
+	go run scripts/setup_onnx.go
 
 setup-go:
 	@echo "Instalando deps do Parser (Go)..."

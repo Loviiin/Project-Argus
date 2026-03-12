@@ -32,9 +32,55 @@ func getONNXSolver() (*captcha.Solver, error) {
 	onnxSolverOnce.Do(func() {
 		modelPath := os.Getenv("ONNX_MODEL_PATH")
 		if modelPath == "" {
-			modelPath = "argus_v6_csl_fp32.onnx"
+			paths := []string{
+				"argus_v6_csl_fp32.onnx",
+				"../../argus_v6_csl_fp32.onnx",
+				"../../../argus_v6_csl_fp32.onnx",
+			}
+			for _, p := range paths {
+				if stat, err := os.Stat(p); err == nil && !stat.IsDir() {
+					modelPath = p
+					break
+				}
+			}
+			if modelPath == "" {
+				modelPath = "argus_v6_csl_fp32.onnx"
+			}
 		}
+
 		runtimePath := os.Getenv("ONNX_RUNTIME_PATH")
+		if runtimePath == "" {
+			// Tenta procurar a biblioteca de runtime nos mesmos diretórios do modelo
+			// e com as extensões apropriadas para cada OS
+			libNames := []string{
+				"libonnxruntime.so",    // Linux
+				"onnxruntime.dll",      // Windows
+				"libonnxruntime.dylib", // macOS
+			}
+
+			basePaths := []string{"", "../../", "../../../"}
+
+			foundRuntime := false
+			for _, base := range basePaths {
+				for _, name := range libNames {
+					fullPath := base + name
+					if stat, err := os.Stat(fullPath); err == nil && !stat.IsDir() {
+						runtimePath = fullPath
+						foundRuntime = true
+						break
+					}
+				}
+				if foundRuntime {
+					break
+				}
+			}
+
+			// Se não encontrou um arquivo local, deixa vazio
+			// A biblioteca github.com/yalue/onnxruntime_go (usada pelo pacote captcha)
+			// possui um fallback padrão de carregar "libonnxruntime.so" ou equivalente
+			// pelo loader dinâmico do SO (LD_LIBRARY_PATH ou PATH).
+		}
+
 		onnxSolver, onnxSolverErr = captcha.NewSolver(modelPath, runtimePath)
 		if onnxSolverErr != nil {
 			fmt.Printf("⚠️  [ONNX] Erro inicializando solver local: %v\n", onnxSolverErr)
@@ -202,8 +248,8 @@ func handleRotateCaptcha(page *rod.Page, ctxStr string) error {
 			continue
 		}
 
-		fmt.Printf("🎯 [Captcha] Arrastando slider: ângulo=%.2f°, distância=%.2fpx (track=%.0f, knob=%.0f)\n",
-			angle, pixelsToMove, trackWidth, knobWidth)
+		fmt.Printf("🎯 [Captcha] Arrastando slider: ângulo=%.2f° → distância=%.2fpx (%.0f%% do track, track=%.0f, knob=%.0f)\n",
+			angle, pixelsToMove, (pixelsToMove/(trackWidth-knobWidth))*100, trackWidth, knobWidth)
 
 		if err := DragSlider(page, slider, pixelsToMove); err != nil {
 			fmt.Printf("⚠️  [Captcha] Erro arrastando slider (tentativa %d): %v\n", attempt, err)
@@ -218,6 +264,8 @@ func handleRotateCaptcha(page *rod.Page, ctxStr string) error {
 		}
 
 		fmt.Printf("⚠️  [Captcha] Ainda presente após rotação (tentativa %d)\n", attempt)
+		// Aguarda TikTok terminar animação de erro e recarregar novas imagens
+		time.Sleep(1500 * time.Millisecond)
 	}
 
 	fmt.Printf("[%s] ⚠️  [Captcha] Tentativas automáticas esgotadas para ROTAÇÃO.\n", ctxStr)
@@ -777,7 +825,10 @@ func findSlider(page *rod.Page) (*rod.Element, error) {
 	fmt.Println("🔍 [Captcha] Procurando elemento slider (.secsdk-captcha-drag-icon)...")
 
 	for _, selector := range sliderSelectors {
-		elements, err := page.Timeout(500 * time.Millisecond).Elements(selector)
+		// Timeout de 30s: a busca retorna instantaneamente se o elemento existe,
+		// mas o contexto do elemento fica vivo por 30s — tempo suficiente para
+		// todo o DragSlider (curvas de Bézier, micro-pausas, etc.) completar.
+		elements, err := page.Timeout(30 * time.Second).Elements(selector)
 		if err != nil || len(elements) == 0 {
 			continue
 		}
@@ -800,12 +851,9 @@ func findSlider(page *rod.Page) (*rod.Element, error) {
 			width := quad[2] - quad[0]
 			height := quad[5] - quad[1]
 
-			// Slider icon geralmente tem 20-50px
-			if width >= 15 && height >= 15 && width <= 80 && height <= 80 {
+			if (width >= 15 && height >= 15 && width <= 80 && height <= 80) ||
+				(width > 10 && height > 10) {
 				fmt.Printf("✅ [Captcha] Slider encontrado via: %s (%.0fx%.0f)\n", selector, width, height)
-				return el, nil
-			} else if width > 10 && height > 10 {
-				fmt.Printf("⚠️  [Captcha] Elemento com tamanho atípico via %s: %.0fx%.0f (tentando)\n", selector, width, height)
 				return el, nil
 			}
 		}

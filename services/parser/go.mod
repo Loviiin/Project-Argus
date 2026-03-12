@@ -9,7 +9,7 @@ require (
 	github.com/loviiin/project-argus/pkg v0.0.0-20260203143619-6a168dc9459d
 	github.com/meilisearch/meilisearch-go v0.36.0
 	github.com/nats-io/nats.go v1.48.0
-	github.com/redis/go-redis/v9 v9.17.3
+	github.com/redis/go-redis/v9 v9.18.0
 )
 
 require (
@@ -29,6 +29,7 @@ require (
 	github.com/ysmood/got v0.40.0 // indirect
 	github.com/ysmood/gson v0.7.3 // indirect
 	github.com/ysmood/leakless v0.9.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
 	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
