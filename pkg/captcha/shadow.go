@@ -314,27 +314,28 @@ func RunShadowCollector(page *rod.Page, datasetPath string, origin string) error
 	return nil
 }
 
-// ExtractRotateImages extrai as imagens do captcha de rotação em Base64
-func ExtractRotateImages(page *rod.Page) (outer, inner string, err error) {
-	fmt.Println("🔍 [Captcha] Extraindo imagens do captcha de rotação...")
+// extractRotateImageURLs localiza as URLs das imagens outer e inner no DOM.
+// Função interna reutilizada por ExtractRotateImages e ExtractRotateImageBytes.
+func extractRotateImageURLs(page *rod.Page) (outerURL, innerURL string, err error) {
+	fmt.Println("🔍 [Captcha] Extraindo URLs das imagens do captcha de rotação...")
 
 	// Estratégia 1: Buscar por alt="Captcha"
 	captchaImages, err := page.Elements("img[alt='Captcha']")
 	if err == nil && len(captchaImages) >= 2 {
 		outerSrc, _ := captchaImages[0].Attribute("src")
 		if outerSrc != nil {
-			outer = *outerSrc
+			outerURL = *outerSrc
 		}
 
 		innerSrc, _ := captchaImages[1].Attribute("src")
 		if innerSrc != nil {
-			inner = *innerSrc
+			innerURL = *innerSrc
 		}
 	}
 
 	// Estratégia 2: Extensões por CSS
-	if outer == "" || inner == "" {
-		if outer == "" {
+	if outerURL == "" || innerURL == "" {
+		if outerURL == "" {
 			outerSelectors := []string{
 				"img[class*='cap-h-[170px]']",
 				"img[class*='cap-h-[210px]']",
@@ -343,13 +344,13 @@ func ExtractRotateImages(page *rod.Page) (outer, inner string, err error) {
 			for _, selector := range outerSelectors {
 				if el, err := page.Timeout(1 * time.Second).Element(selector); err == nil {
 					if src, err := el.Attribute("src"); err == nil && src != nil {
-						outer = *src
+						outerURL = *src
 						break
 					}
 				}
 			}
 		}
-		if inner == "" {
+		if innerURL == "" {
 			innerSelectors := []string{
 				"img[class*='cap-absolute']",
 				"img[class*='cap-h-[105px]']",
@@ -359,7 +360,7 @@ func ExtractRotateImages(page *rod.Page) (outer, inner string, err error) {
 			for _, selector := range innerSelectors {
 				if el, err := page.Timeout(1 * time.Second).Element(selector); err == nil {
 					if src, err := el.Attribute("src"); err == nil && src != nil {
-						inner = *src
+						innerURL = *src
 						break
 					}
 				}
@@ -368,7 +369,7 @@ func ExtractRotateImages(page *rod.Page) (outer, inner string, err error) {
 	}
 
 	// Estratégia 3: Fallback container
-	if outer == "" || inner == "" {
+	if outerURL == "" || innerURL == "" {
 		containerSelectors := []string{
 			"[class*='captcha-verify-container']",
 			"[class*='TUXModal']",
@@ -379,14 +380,14 @@ func ExtractRotateImages(page *rod.Page) (outer, inner string, err error) {
 			if err == nil {
 				images, _ := container.Elements("img")
 				if len(images) >= 2 {
-					if outer == "" {
+					if outerURL == "" {
 						if src, err := images[0].Attribute("src"); err == nil && src != nil {
-							outer = *src
+							outerURL = *src
 						}
 					}
-					if inner == "" {
+					if innerURL == "" {
 						if src, err := images[1].Attribute("src"); err == nil && src != nil {
-							inner = *src
+							innerURL = *src
 						}
 					}
 					break
@@ -395,22 +396,50 @@ func ExtractRotateImages(page *rod.Page) (outer, inner string, err error) {
 		}
 	}
 
-	if outer != "" {
-		outer, err = DownloadImageAsBase64(outer)
-		if err != nil {
-			return "", "", fmt.Errorf("erro processando outer: %w", err)
-		}
-	}
-
-	if inner != "" {
-		inner, err = DownloadImageAsBase64(inner)
-		if err != nil {
-			return "", "", fmt.Errorf("erro processando inner: %w", err)
-		}
-	}
-
-	if outer == "" || inner == "" {
+	if outerURL == "" || innerURL == "" {
 		return "", "", ErrCaptchaNotFound
+	}
+
+	return outerURL, innerURL, nil
+}
+
+// ExtractRotateImageBytes extrai as imagens do captcha de rotação como bytes crus.
+// Retorna os binários das imagens (PNG/JPEG/WebP) prontos para inferência ONNX.
+func ExtractRotateImageBytes(page *rod.Page) (outer, inner []byte, err error) {
+	outerURL, innerURL, err := extractRotateImageURLs(page)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	outer, err = DownloadImageRaw(outerURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("erro baixando outer: %w", err)
+	}
+
+	inner, err = DownloadImageRaw(innerURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("erro baixando inner: %w", err)
+	}
+
+	return outer, inner, nil
+}
+
+// ExtractRotateImages extrai as imagens do captcha de rotação em Base64.
+// Mantido para compatibilidade com fallbacks (NATS, SadCaptcha).
+func ExtractRotateImages(page *rod.Page) (outer, inner string, err error) {
+	outerURL, innerURL, err := extractRotateImageURLs(page)
+	if err != nil {
+		return "", "", err
+	}
+
+	outer, err = DownloadImageAsBase64(outerURL)
+	if err != nil {
+		return "", "", fmt.Errorf("erro processando outer: %w", err)
+	}
+
+	inner, err = DownloadImageAsBase64(innerURL)
+	if err != nil {
+		return "", "", fmt.Errorf("erro processando inner: %w", err)
 	}
 
 	return outer, inner, nil
@@ -443,6 +472,29 @@ func DownloadImageAsBase64(imageURL string) (string, error) {
 	}
 
 	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+// DownloadImageRaw baixa uma imagem por URL e retorna os bytes crus.
+// Trata data URIs extraindo e decodificando o base64 embutido.
+func DownloadImageRaw(imageURL string) ([]byte, error) {
+	if strings.HasPrefix(imageURL, "data:image") {
+		parts := strings.Split(imageURL, ",")
+		if len(parts) > 1 {
+			return base64.StdEncoding.DecodeString(parts[1])
+		}
+	}
+
+	resp, err := http.Get(imageURL)
+	if err != nil {
+		return nil, fmt.Errorf("erro baixando imagem: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d ao baixar imagem", resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
 }
 
 func saveBase64Image(b64, path string) error {

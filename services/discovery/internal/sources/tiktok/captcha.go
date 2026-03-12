@@ -9,12 +9,41 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/loviiin/project-argus/pkg/captcha"
 	"github.com/nats-io/nats.go"
 )
+
+// onnxSolver é a instância singleton do solver ONNX local.
+// Inicializada sob demanda na primeira chamada a getONNXSolver().
+var (
+	onnxSolver     *captcha.Solver
+	onnxSolverOnce sync.Once
+	onnxSolverErr  error
+)
+
+// getONNXSolver retorna a instância singleton do solver ONNX.
+// O caminho do modelo é lido da env ONNX_MODEL_PATH (default: argus_v6_csl_fp32.onnx).
+// O caminho do runtime é lido da env ONNX_RUNTIME_PATH (default: libonnxruntime.so).
+func getONNXSolver() (*captcha.Solver, error) {
+	onnxSolverOnce.Do(func() {
+		modelPath := os.Getenv("ONNX_MODEL_PATH")
+		if modelPath == "" {
+			modelPath = "argus_v6_csl_fp32.onnx"
+		}
+		runtimePath := os.Getenv("ONNX_RUNTIME_PATH")
+		onnxSolver, onnxSolverErr = captcha.NewSolver(modelPath, runtimePath)
+		if onnxSolverErr != nil {
+			fmt.Printf("⚠️  [ONNX] Erro inicializando solver local: %v\n", onnxSolverErr)
+		} else {
+			fmt.Println("✅ [ONNX] Solver local inicializado com sucesso")
+		}
+	})
+	return onnxSolver, onnxSolverErr
+}
 
 const SadCaptchaBaseURL = "https://www.sadcaptcha.com/api/v1"
 
@@ -90,7 +119,10 @@ func detectCaptchaType(page *rod.Page) CaptchaType {
 	return CaptchaTypeRotate
 }
 
-// handleRotateCaptcha resolve captcha do tipo Rotate usando Vision Service
+// handleRotateCaptcha resolve captcha do tipo Rotate usando:
+// 1. Solver ONNX local (prioritário, gratuito)
+// 2. Vision Service via NATS (fallback gratuito)
+// 3. SadCaptcha API (fallback pago)
 // A rotação é controlada por um slider horizontal
 func handleRotateCaptcha(page *rod.Page, ctxStr string) error {
 	fmt.Printf("[%s] 🔄 [Captcha] Detectado captcha de ROTAÇÃO\n", ctxStr)
@@ -104,24 +136,50 @@ func handleRotateCaptcha(page *rod.Page, ctxStr string) error {
 			time.Sleep(retryDelay)
 		}
 
-		outerB64, innerB64, err := captcha.ExtractRotateImages(page)
-		if err != nil {
-			fmt.Printf("⚠️  [Captcha] Erro extraindo imagens (tentativa %d): %v\n", attempt, err)
+		// Extrai imagens como bytes crus — base64 só se necessário para fallbacks.
+		outerBytes, innerBytes, extractErr := captcha.ExtractRotateImageBytes(page)
+		if extractErr != nil {
+			fmt.Printf("⚠️  [Captcha] Erro extraindo imagens (tentativa %d): %v\n", attempt, extractErr)
 			continue
 		}
 
 		var angle float64
-		angle, err = solvePuzzleWithVisionService(outerB64, innerB64)
-		if err != nil {
-			fmt.Printf("⚠️  [Captcha] Vision Service falhou: %v\n", err)
-			angle, err = solveRotateWithSadCaptcha(outerB64, innerB64)
+
+		// Método 1: Solver ONNX local (prioritário) — bytes crus, sem Base64.
+		solver, solverErr := getONNXSolver()
+		if solverErr == nil {
+			angleFP32, err := solver.PredictBytes(outerBytes, innerBytes)
 			if err != nil {
-				fmt.Printf("⚠️  [Captcha] Ambos os métodos falharam (tentativa %d)\n", attempt)
-				continue
+				fmt.Printf("⚠️  [ONNX] Inferência local falhou: %v\n", err)
+			} else {
+				angle = float64(angleFP32)
+				fmt.Printf("✅ [ONNX] Resolvido localmente: ângulo=%.2f°\n", angle)
 			}
-			fmt.Println("✅ [Captcha] Resolvido com SadCaptcha")
-		} else {
-			fmt.Println("✅ [Captcha] Resolvido com Vision Service")
+		}
+
+		// Fallbacks precisam de Base64 — codifica sob demanda.
+		if angle == 0 {
+			outerB64 := base64.StdEncoding.EncodeToString(outerBytes)
+			innerB64 := base64.StdEncoding.EncodeToString(innerBytes)
+
+			// Método 2: Vision Service via NATS (fallback gratuito)
+			var err error
+			angle, err = solvePuzzleWithVisionService(outerB64, innerB64)
+			if err != nil {
+				fmt.Printf("⚠️  [Captcha] Vision Service falhou: %v\n", err)
+			} else {
+				fmt.Println("✅ [Captcha] Resolvido com Vision Service")
+			}
+
+			// Método 3: SadCaptcha API (fallback pago)
+			if angle == 0 {
+				angle, err = solveRotateWithSadCaptcha(outerB64, innerB64)
+				if err != nil {
+					fmt.Printf("⚠️  [Captcha] Todos os métodos falharam (tentativa %d)\n", attempt)
+					continue
+				}
+				fmt.Println("✅ [Captcha] Resolvido com SadCaptcha")
+			}
 		}
 
 		if angle == 0 {
@@ -135,61 +193,17 @@ func handleRotateCaptcha(page *rod.Page, ctxStr string) error {
 			continue
 		}
 
-		var l_s, l_i float64
+		trackWidth, knobWidth := measureSliderDimensions(page, slider)
 
-		slidebarWidth, err := page.Eval(`() => {
-			const selectors = [
-				'.captcha_verify_slide--slidebar',
-				'[class*="captcha_verify_slide--slidebar"]',
-				'[class*="cap-w-full"][class*="cap-relative"]'
-			];
-			for (const sel of selectors) {
-				const el = document.querySelector(sel);
-				if (el) {
-					const rect = el.getBoundingClientRect();
-					if (rect.width > 100) return rect.width;
-				}
-			}
-			const icon = document.querySelector('.secsdk-captcha-drag-icon');
-			if (icon) {
-				let parent = icon.parentElement;
-				for (let i = 0; i < 5 && parent; i++) {
-					const rect = parent.getBoundingClientRect();
-					if (rect.width > 200) return rect.width;
-					parent = parent.parentElement;
-				}
-			}
-			return 0;
-		}`)
-		if err != nil || slidebarWidth.Value.Num() == 0 {
-			l_s = 340.0
-		} else {
-			l_s = slidebarWidth.Value.Num()
-		}
-
-		iconWidth, err := page.Eval(`() => {
-			const icon = document.querySelector('.secsdk-captcha-drag-icon');
-			if (icon) {
-				const rect = icon.getBoundingClientRect();
-				return rect.width;
-			}
-			return 0;
-		}`)
-		if err != nil || iconWidth.Value.Num() == 0 {
-			l_i = 64.0
-		} else {
-			l_i = iconWidth.Value.Num()
-		}
-
-		maxDistance := l_s - l_i
-		pixelsToMove := (maxDistance * angle) / 360.0
+		pixelsToMove := captcha.AngleToPixels(float32(angle), trackWidth, knobWidth)
 
 		if pixelsToMove <= 0 {
 			fmt.Printf("⚠️  [Captcha] Distância calculada inválida: %.2f (tentativa %d)\n", pixelsToMove, attempt)
 			continue
 		}
 
-		fmt.Printf("🎯 [Captcha] Arrastando slider: ângulo=%.2f°, distância=%.2fpx\n", angle, pixelsToMove)
+		fmt.Printf("🎯 [Captcha] Arrastando slider: ângulo=%.2f°, distância=%.2fpx (track=%.0f, knob=%.0f)\n",
+			angle, pixelsToMove, trackWidth, knobWidth)
 
 		if err := DragSlider(page, slider, pixelsToMove); err != nil {
 			fmt.Printf("⚠️  [Captcha] Erro arrastando slider (tentativa %d): %v\n", attempt, err)
@@ -670,6 +684,66 @@ func extractCaptchaImages(page *rod.Page) (*CaptchaImages, error) {
 		BackgroundURL: backgroundURL,
 		PieceURL:      pieceURL,
 	}, nil
+}
+
+// measureSliderDimensions extrai trackWidth e knobWidth usando Bounding Box do go-rod.
+// Primeiro tenta via Shape() dos elementos DOM; se não encontrar, faz fallback via JS.
+// Nunca retorna valores hardcoded sem antes tentar medição dinâmica.
+func measureSliderDimensions(page *rod.Page, knob *rod.Element) (trackWidth, knobWidth float64) {
+	// 1. Medir knob via Shape() (já temos o elemento)
+	if shape, err := knob.Shape(); err == nil && len(shape.Quads) > 0 {
+		quad := shape.Quads[0]
+		knobWidth = quad[2] - quad[0]
+	}
+
+	// 2. Medir track (barra) via Shape() — procurar o container pai do slider
+	trackSelectors := []string{
+		".captcha_verify_slide--slidebar",
+		`[class*="captcha_verify_slide--slidebar"]`,
+		`[class*="cap-w-full"][class*="cap-relative"]`,
+	}
+	for _, sel := range trackSelectors {
+		if el, err := page.Timeout(500 * time.Millisecond).Element(sel); err == nil {
+			if shape, err := el.Shape(); err == nil && len(shape.Quads) > 0 {
+				quad := shape.Quads[0]
+				w := quad[2] - quad[0]
+				if w > 100 {
+					trackWidth = w
+					break
+				}
+			}
+		}
+	}
+
+	// 3. Se track não encontrado por seletor, sobe pela árvore do knob
+	if trackWidth == 0 {
+		if parent, err := knob.Parent(); err == nil {
+			for i := 0; i < 5 && parent != nil; i++ {
+				if shape, err := parent.Shape(); err == nil && len(shape.Quads) > 0 {
+					quad := shape.Quads[0]
+					w := quad[2] - quad[0]
+					if w > 200 {
+						trackWidth = w
+						break
+					}
+				}
+				parent, _ = parent.Parent()
+			}
+		}
+	}
+
+	// 4. Fallback conservador se medição dinâmica falhou
+	if trackWidth == 0 {
+		trackWidth = 340.0
+		fmt.Println("⚠️  [Captcha] trackWidth não medido — usando fallback 340px")
+	}
+	if knobWidth == 0 {
+		knobWidth = 64.0
+		fmt.Println("⚠️  [Captcha] knobWidth não medido — usando fallback 64px")
+	}
+
+	fmt.Printf("📏 [Captcha] Dimensões medidas: track=%.0fpx, knob=%.0fpx\n", trackWidth, knobWidth)
+	return trackWidth, knobWidth
 }
 
 // findSlider localiza o elemento do slider que deve ser arrastado
