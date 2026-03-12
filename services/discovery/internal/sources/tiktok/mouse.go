@@ -41,6 +41,9 @@ func DragSlider(page *rod.Page, slider *rod.Element, distanceX float64) error {
 	endX := startX + distanceX
 	endY := startY + randomFloat(-3, 3)
 
+	fmt.Printf("🐛 [Mouse] Shape: quad=[%.0f,%.0f,%.0f,%.0f] center=(%.1f,%.1f) → end=(%.1f,%.1f) dist=%.1f\n",
+		quad[0], quad[1], quad[2], quad[5], startX, startY, endX, endY, distanceX)
+
 	// Move o mouse para o início do slider com approach natural
 	if err := moveMouseToElement(page, startX, startY); err != nil {
 		return err
@@ -67,7 +70,7 @@ func DragSlider(page *rod.Page, slider *rod.Element, distanceX float64) error {
 	time.Sleep(time.Duration(randomInt(50, 100)) * time.Millisecond)
 
 	// Pressiona o botão do mouse diretamente no elemento
-	// Isso garante que o evento mousedown seja disparado no elemento correto
+	fmt.Printf("🐛 [Mouse] MouseDown em (%.1f, %.1f)\n", startX, startY)
 	if err := page.Mouse.Down("left", 1); err != nil {
 		return fmt.Errorf("erro pressionando mouse: %w", err)
 	}
@@ -76,6 +79,7 @@ func DragSlider(page *rod.Page, slider *rod.Element, distanceX float64) error {
 	time.Sleep(time.Duration(randomInt(80, 200)) * time.Millisecond)
 
 	// Arrasta usando movimento humano avançado
+	fmt.Printf("🐛 [Mouse] Iniciando drag: (%.1f,%.1f) → (%.1f,%.1f)\n", startX, startY, endX, endY)
 	if err := dragWithHumanMovement(page, startX, startY, endX, endY); err != nil {
 		page.Mouse.Up("left", 1) // Garante que solta o mouse mesmo se houver erro
 		return err
@@ -95,12 +99,14 @@ func DragSlider(page *rod.Page, slider *rod.Element, distanceX float64) error {
 	}
 
 	// Solta o botão do mouse
+	fmt.Printf("🐛 [Mouse] MouseUp em (%.1f, %.1f)\n", endX, endY)
 	if err := page.Mouse.Up("left", 1); err != nil {
 		return fmt.Errorf("erro soltando mouse: %w", err)
 	}
 
 	// Pausa pós-soltar (humanos não movem mouse imediatamente após soltar)
 	time.Sleep(time.Duration(randomInt(100, 250)) * time.Millisecond)
+	fmt.Println("🐛 [Mouse] Drag completo!")
 	return nil
 }
 
