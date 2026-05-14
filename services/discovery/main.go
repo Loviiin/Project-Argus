@@ -46,8 +46,13 @@ func main() {
 	})
 	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
 
-	log.Println("Inicializando driver do navegador (Discovery)...")
-	tikTokSource := sources.NewTikTokRodSource(dedupSv)
+	// HTTP puro — sem browser, sem captcha, sem go-rod
+	sidecarURL := os.Getenv("SIDECAR_URL")
+	if sidecarURL == "" {
+		sidecarURL = "http://localhost:8000"
+	}
+	log.Printf("Inicializando coletor HTTP puro (sidecar: %s)...", sidecarURL)
+	tikTokSource := sources.NewTikTokHTTPSource(sidecarURL, dedupSv)
 	svc := service.NewDiscoveryService(js, rdb, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
 
 	interval := time.Duration(cfg.Discovery.Interval) * time.Second

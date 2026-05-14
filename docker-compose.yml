@@ -50,6 +50,15 @@ services:
       - MEILI_ENV=development
     restart: unless-stopped
 
+  tiktok-signer:
+    image: evil0ctal/douyin_tiktok_download_api:latest
+    container_name: tiktok-signer
+    ports:
+      - "8000:80"
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+
 volumes:
   postgres_data:
   nats_data:
