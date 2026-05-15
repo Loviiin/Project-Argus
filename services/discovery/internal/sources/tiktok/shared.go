@@ -7,8 +7,10 @@ import (
 
 // DiscoveredVideo contém apenas o ID e URL de um vídeo descoberto.
 type DiscoveredVideo struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Desc   string `json:"desc"`
+	Author string `json:"author"`
 }
 
 // extractID extrai o ID do vídeo a partir de uma URL do TikTok.

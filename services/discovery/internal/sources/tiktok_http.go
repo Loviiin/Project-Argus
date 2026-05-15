@@ -2,60 +2,82 @@ package sources
 
 import (
 	"context"
-	"net/http"
-	"time"
 
 	"discovery/internal/sources/tiktok"
 
 	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/redis/go-redis/v9"
 )
 
-// TikTokHTTPWrapper implementa a interface Source usando o coletor HTTP puro.
-// Converte os tipos internos do pacote tiktok para sources.DiscoveredVideo,
-// mantendo o mesmo padrão do TikTokWrapper (Rod).
+// ── Stage 1: Hashtag Discovery ────────────────────────────────────────────────
+
+// TikTokHTTPWrapper implementa a interface Source usando o coletor por hashtag.
 type TikTokHTTPWrapper struct {
 	source *tiktok.HTTPSource
 }
 
-// NewTikTokHTTPSource cria uma nova instância do coletor HTTP puro do TikTok.
-//   - sidecarURL: endereço do serviço de assinatura (ex: http://localhost:8000).
-//     Se vazio, utiliza o default http://localhost:8000.
-//   - dedup: deduplicador Redis para filtrar vídeos já processados
-func NewTikTokHTTPSource(sidecarURL string, dedup *dedup.Deduplicator) Source {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
+// NewTikTokHTTPSource cria o coletor de Stage 1 (busca por hashtag).
+//   - sidecarURL: Evil0ctal URL
+//   - ttwid: cookie de sessão (config.yaml: tiktok.ttwid)
+//   - dedup: deduplicador Redis
+func NewTikTokHTTPSource(sidecarURL, ttwid string, dedup *dedup.Deduplicator) Source {
 	return &TikTokHTTPWrapper{
-		source: tiktok.NewTikTokHTTPSource(sidecarURL, client, dedup),
+		source: tiktok.NewTikTokHTTPSource(sidecarURL, ttwid, dedup),
 	}
 }
 
-// Name retorna o nome identificador do source.
-func (w *TikTokHTTPWrapper) Name() string {
-	return w.source.Name()
-}
-
-// Fetch descobre URLs de vídeos e retorna apenas os novos (filtrados pelo Redis).
+func (w *TikTokHTTPWrapper) Name() string { return w.source.Name() }
+func (w *TikTokHTTPWrapper) Close() error { return w.source.Close() }
 func (w *TikTokHTTPWrapper) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, error) {
 	results, err := w.source.Fetch(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-
-	// Converte tiktok.DiscoveredVideo → sources.DiscoveredVideo
-	var converted []DiscoveredVideo
+	var out []DiscoveredVideo
 	for _, r := range results {
-		converted = append(converted, DiscoveredVideo{
-			ID:  r.ID,
-			URL: r.URL,
+		out = append(out, DiscoveredVideo{
+			ID:     r.ID,
+			URL:    r.URL,
+			Desc:   r.Desc,
+			Author: r.Author,
 		})
 	}
-
-	return converted, nil
+	return out, nil
 }
 
-// Close libera recursos. O coletor HTTP não mantém estado persistente.
-func (w *TikTokHTTPWrapper) Close() error {
-	return w.source.Close()
+// ── Stage 2: User/Target Tracker ──────────────────────────────────────────────
+
+// TikTokUserWrapper implementa a interface Source usando o rastreador de contas.
+type TikTokUserWrapper struct {
+	source *tiktok.UserSource
+}
+
+// NewTikTokUserSource cria o coletor de Stage 2 (rastreamento de contas).
+//   - sidecarURL: Evil0ctal URL
+//   - seedAccounts: contas iniciais do config.yaml (tiktok.target_accounts)
+//   - rdb: Redis (para ler alvos descobertos pelo Stage 1)
+//   - dedup: deduplicador
+func NewTikTokUserSource(sidecarURL string, seedAccounts []string, rdb *redis.Client, dedup *dedup.Deduplicator) Source {
+	return &TikTokUserWrapper{
+		source: tiktok.NewTikTokUserSource(sidecarURL, seedAccounts, rdb, dedup),
+	}
+}
+
+func (w *TikTokUserWrapper) Name() string { return w.source.Name() }
+func (w *TikTokUserWrapper) Close() error { return w.source.Close() }
+func (w *TikTokUserWrapper) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, error) {
+	results, err := w.source.Fetch(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	var out []DiscoveredVideo
+	for _, r := range results {
+		out = append(out, DiscoveredVideo{
+			ID:     r.ID,
+			URL:    r.URL,
+			Desc:   r.Desc,
+			Author: r.Author,
+		})
+	}
+	return out, nil
 }
