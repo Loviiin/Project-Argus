@@ -46,9 +46,24 @@ func main() {
 	})
 	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
 
-	log.Println("Inicializando driver do navegador (Discovery)...")
-	tikTokSource := sources.NewTikTokRodSource(dedupSv)
-	svc := service.NewDiscoveryService(js, rdb, []sources.Source{tikTokSource}, cfg.Discovery.Workers)
+	// ── Pipeline de Coleta em 2 Estágios ──────────────────────────────────────
+	sidecarURL := cfg.TikTok.SidecarURL
+	if v := os.Getenv("SIDECAR_URL"); v != "" {
+		sidecarURL = v // override via env (Docker)
+	}
+	if sidecarURL == "" {
+		sidecarURL = "http://localhost:8000"
+	}
+
+	// Estágio 1: Broad Discovery — busca por hashtag com ttwid + tls-client
+	log.Printf("Inicializando Stage 1 (Hashtag Discovery) — sidecar: %s", sidecarURL)
+	stage1 := sources.NewTikTokHTTPSource(sidecarURL, cfg.TikTok.Ttwid, dedupSv)
+
+	// Estágio 2: Target Tracking — monitora contas via Evil0ctal
+	log.Printf("Inicializando Stage 2 (User Tracker) — %d conta(s) seed", len(cfg.TikTok.TargetAccounts))
+	stage2 := sources.NewTikTokUserSource(sidecarURL, cfg.TikTok.TargetAccounts, rdb, dedupSv)
+
+	svc := service.NewDiscoveryService(js, rdb, []sources.Source{stage1, stage2}, cfg.Discovery.Workers)
 
 	interval := time.Duration(cfg.Discovery.Interval) * time.Second
 	if interval == 0 {

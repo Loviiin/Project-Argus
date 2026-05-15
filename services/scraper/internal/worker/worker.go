@@ -1,18 +1,17 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/stealth"
-	"github.com/loviiin/project-argus/pkg/captcha"
+	"github.com/loviiin/project-argus/pkg/tiktok"
 )
 
 // ScrapeJob é o payload recebido do tópico NATS jobs.scrape.
@@ -20,6 +19,8 @@ type ScrapeJob struct {
 	VideoID  string `json:"video_id"`
 	VideoURL string `json:"video_url"`
 	Hashtag  string `json:"hashtag"`
+	Desc     string `json:"desc"`
+	Author   string `json:"author"`
 }
 
 // ArtifactPayload é o payload publicado no tópico data.text_extracted.
@@ -31,257 +32,111 @@ type ArtifactPayload struct {
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// RawComment representa um comentário extraído.
-type RawComment struct {
-	Nick string `json:"nick"`
-	Text string `json:"text"`
+// Processor encapsula as dependências para processar vídeos.
+type Processor struct {
+	SidecarURL string
+	HttpClient *http.Client
 }
 
-// TikTokAPIResponse representa a resposta da API interna do TikTok.
-type TikTokAPIResponse struct {
-	Comments []struct {
-		Text string `json:"text"`
-		User struct {
-			UniqueId string `json:"unique_id"`
-		} `json:"user"`
-	} `json:"comments"`
+func NewProcessor(sidecarURL string) *Processor {
+	return &Processor{
+		SidecarURL: strings.TrimRight(sidecarURL, "/"),
+		HttpClient: &http.Client{Timeout: 30 * time.Second},
+	}
 }
 
-const (
-	perVideoTimeout     = 20 * time.Second
-	MaxCommentsPerVideo = 200 // Limita o numero maximo de comentários para não travar em vídeos virais
-)
-
-// ProcessVideo abre a página de um vídeo, intercepta a API de comentários,
-// extrai dados e retorna o payload para publicação.
-func ProcessVideo(browser *rod.Browser, job ScrapeJob) (*ArtifactPayload, error) {
-	page, err := stealth.Page(browser)
+func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) (*ArtifactPayload, error) {
+	// 1. Extrair links da descrição (já vem no job)
+	descText := job.Desc
+	authorID := job.Author
+	
+	discordLinks := tiktok.ExtractDiscordLinks(descText)
+	
+	// 2. Buscar comentários via Sidecar (API Evil0ctal)
+	log.Printf("[Worker] 💬 Buscando comentários para o vídeo %s...", job.VideoID)
+	comments, err := p.fetchVideoComments(ctx, job.VideoID)
 	if err != nil {
-		return nil, fmt.Errorf("erro criando pagina stealth: %w", err)
-	}
-	defer page.Close()
-
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-done:
-		case <-time.After(8 * time.Minute):
-			fmt.Printf("[Worker] 🚨 Watchdog: Timeout estrito de 8m atingido. Forçando encerramento da aba para %s!\n", job.VideoID)
-			page.Close()
-		}
-	}()
-
-	router := page.HijackRequests()
-	defer router.Stop()
-
-	// Cliente HTTP com timeout para evitar que LoadResponse bloqueie para sempre as rotinas do router
-	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
+		log.Printf("[Worker] ⚠️ erro ao buscar comentários para %s: %v", job.VideoID, err)
+		// Continuamos apenas com a descrição se falhar
 	}
 
-	var mu sync.Mutex
-	var capturedComments []RawComment
-
-	router.MustAdd("*/comment/list/*", func(ctx *rod.Hijack) {
-		err := ctx.LoadResponse(httpClient, true)
-		if err != nil {
-			return
-		}
-		body := ctx.Response.Payload().Body
-		var resp TikTokAPIResponse
-		if err := json.Unmarshal(body, &resp); err == nil {
-			mu.Lock()
-			for _, c := range resp.Comments {
-				if len(capturedComments) >= MaxCommentsPerVideo {
-					break
-				}
-				capturedComments = append(capturedComments, RawComment{
-					Nick: c.User.UniqueId,
-					Text: strings.ReplaceAll(c.Text, "\n", " "),
-				})
-			}
-			mu.Unlock()
-		}
-	})
-
-	router.MustAdd("*/comment/reply/list/*", func(ctx *rod.Hijack) {
-		err := ctx.LoadResponse(httpClient, true)
-		if err != nil {
-			return
-		}
-		body := ctx.Response.Payload().Body
-		var resp TikTokAPIResponse
-		if err := json.Unmarshal(body, &resp); err == nil {
-			mu.Lock()
-			for _, c := range resp.Comments {
-				if len(capturedComments) >= MaxCommentsPerVideo {
-					break
-				}
-				capturedComments = append(capturedComments, RawComment{
-					Nick: c.User.UniqueId,
-					Text: "[reply] " + strings.ReplaceAll(c.Text, "\n", " "),
-				})
-			}
-			mu.Unlock()
-		}
-	})
-
-	go router.Run()
-
-	// Navega para o vídeo
-	if err := page.Timeout(perVideoTimeout).Navigate(job.VideoURL); err != nil {
-		return nil, fmt.Errorf("erro navegando para %s: %w", job.VideoURL, err)
-	}
-	page.Timeout(10 * time.Second).WaitLoad()
-	time.Sleep(2 * time.Second)
-
-	// Reload para garantir carregamento completo
-	if err := page.Reload(); err != nil {
-		fmt.Printf("[Worker] reload error: %v\n", err)
-	} else {
-		page.Timeout(10 * time.Second).WaitLoad()
-	}
-	time.Sleep(3 * time.Second)
-
-	// Helper inline para não repetir código
-	handleCaptchaIfNeeded := func(ctx string) error {
-		if captcha.IsCaptchaPresent(page) {
-			fmt.Printf("[Worker] Captcha detectado (%s)! Iniciando Shadow Collector...\n", ctx)
-			if err := captcha.RunShadowCollector(page, "../discovery/dataset/rotation_captcha", "scraper"); err != nil {
-				fmt.Printf("[Worker] Shadow collector falhou ou deu timeout: %v\n", err)
-			}
-			if captcha.IsCaptchaPresent(page) {
-				if err := waitCaptchaResolution(page, 5*time.Minute); err != nil {
-					return fmt.Errorf("falha aguardando resolução manual: %w", err)
-				}
-			}
-			page.Timeout(10 * time.Second).WaitLoad()
-			time.Sleep(3 * time.Second)
-		}
-		return nil
+	var commentTexts []string
+	for _, c := range comments {
+		commentTexts = append(commentTexts, c.Text)
+		// Procurar links nos comentários
+		links := tiktok.ExtractDiscordLinks(c.Text)
+		discordLinks = append(discordLinks, links...)
 	}
 
-	if err := handleCaptchaIfNeeded("load_inicial"); err != nil {
-		return nil, err
+	// 3. Agregar tudo num texto único para o Parser
+	fullText := descText
+	if len(commentTexts) > 0 {
+		fullText += "\n\n--- COMMENTS ---\n" + strings.Join(commentTexts, "\n")
 	}
-
-	// Clica no botão de comentários
-	commentSelectors := []string{
-		`[data-e2e="comment-icon"]`,
-		`[data-e2e="browse-comment"]`,
-		`button[aria-label*="omment"]`,
-		`strong[data-e2e="comment-count"]`,
-		`span[data-e2e="comment-count"]`,
-	}
-	for _, sel := range commentSelectors {
-		if el, err := page.Timeout(2 * time.Second).Element(sel); err == nil {
-			if err2 := el.Click(proto.InputMouseButtonLeft, 1); err2 == nil {
-				break
-			}
-		}
-	}
-
-	time.Sleep(2 * time.Second)
-
-	// Pegar quantidade de comentários para ajustar scroll
-	commentCount := 0
-	if el, err := page.Timeout(2 * time.Second).Element(`strong[data-e2e="comment-count"], span[data-e2e="comment-count"]`); err == nil {
-		if text, err := el.Text(); err == nil {
-			commentCount = parseCount(text)
-		}
-	}
-
-	passes := 4
-	if commentCount > 20 {
-		passes = 4 + (commentCount-20)/10
-		if passes > 20 {
-			passes = 20
-		}
-	}
-
-	fmt.Printf("[Worker] 💬 Previstos %d comentários. Scroll passes: %d\n", commentCount, passes)
-
-	// Scroll no painel de comentários e clica em replies
-	for pass := 0; pass < passes; pass++ {
-		mu.Lock()
-		currentLen := len(capturedComments)
-		mu.Unlock()
-
-		if currentLen >= MaxCommentsPerVideo {
-			fmt.Printf("[Worker] 🛑 Limite de %d comentários atingido. Interrompendo scroll...\n", MaxCommentsPerVideo)
-			break
-		}
-
-		time.Sleep(1500 * time.Millisecond)
-		page.Eval(`() => {
-			const panel = document.querySelector(
-				'[data-e2e="comment-list"], [class*="DivCommentListContainer"], [class*="CommentListScroller"]'
-			);
-			if (panel) { panel.scrollTop += 800; }
-			else { window.scrollBy(0, 400); }
-		}`)
-		time.Sleep(3 * time.Second)
-
-		replyBtns, _ := page.Elements(
-			`[data-e2e="view-more-replies"], [class*="SpanViewMoreReply"], span[class*="view-more"], [class*="DivViewRepliesContainer"]`,
-		)
-
-		fmt.Printf("[Worker]   Passo %d/%d - Clicando em %d respostas...\n", pass+1, passes, len(replyBtns))
-		for _, btn := range replyBtns {
-			_, _ = btn.Eval("() => this.click()")
-			time.Sleep(200 * time.Millisecond)
-		}
-
-		// O TikTok pode jogar Captchas durante o clique em "View Replies" ou no Scroll excessivo
-		if err := handleCaptchaIfNeeded(fmt.Sprintf("loop_comentarios_%d", pass+1)); err != nil {
-			return nil, err
-		}
-	}
-
-	time.Sleep(3 * time.Second)
-
-	descText := extractDescription(page)
 
 	// Log formatado
 	fmt.Printf("\n[Worker] ✅ Vídeo Processado: %s\n", job.VideoID)
+	fmt.Printf("      👤 Autor: @%s\n", authorID)
 	fmt.Printf("      📝 Descrição: %s\n", truncate(sanitize(descText), 100))
-	fmt.Printf("      💬 Comentários: %d\n", len(capturedComments))
-	for i, c := range capturedComments {
-		if i >= 3 {
-			if len(capturedComments) > 3 {
-				fmt.Printf("      ... e mais %d comentários\n", len(capturedComments)-3)
-			}
-			break
-		}
-		fmt.Printf("      [%d] @%s: %s\n", i+1, c.Nick, truncate(sanitize(c.Text), 60))
+	fmt.Printf("      💬 Comentários analisados: %d\n", len(comments))
+	if len(discordLinks) > 0 {
+		fmt.Printf("      🎯 Links Discord encontrados: %v\n", discordLinks)
 	}
 
 	// Monta o payload
-	var commentLines []string
-	for _, c := range capturedComments {
-		commentLines = append(commentLines, "@"+c.Nick+": "+c.Text)
-	}
-	fullText := descText + "\n" + strings.Join(commentLines, "\n")
-
-	// Converte []RawComment para []interface{} para metadata
-	commentsInterface := make([]interface{}, len(capturedComments))
-	for i, c := range capturedComments {
-		commentsInterface[i] = c
-	}
-
 	payload := &ArtifactPayload{
 		SourcePath:  job.VideoURL,
 		TextContent: fullText,
-		SourceType:  "tiktok_rod_intercept",
+		SourceType:  "tiktok_api_full",
+		AuthorID:    authorID,
 		Metadata: map[string]interface{}{
-			"comments": commentsInterface,
-			"hashtag":  job.Hashtag,
-			"video_id": job.VideoID,
+			"hashtag":       job.Hashtag,
+			"video_id":      job.VideoID,
+			"author":        authorID,
+			"comment_count": len(comments),
+			"discord_links": discordLinks,
 		},
 	}
 
 	return payload, nil
+}
+
+type commentData struct {
+	Text string `json:"text"`
+}
+
+func (p *Processor) fetchVideoComments(ctx context.Context, videoID string) ([]commentData, error) {
+	endpoint := fmt.Sprintf("%s/api/tiktok/web/fetch_video_comments?itemId=%s&count=50&cursor=0", p.SidecarURL, videoID)
+	
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := p.HttpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sidecar retornou status %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Comments []commentData `json:"comments"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+
+	return envelope.Data.Comments, nil
 }
 
 // RandomDelay aplica um delay aleatório entre min e max segundos.
@@ -293,48 +148,7 @@ func RandomDelay(minSec, maxSec int) {
 
 // --- Funções auxiliares (movidas do client.go original) ---
 
-func extractDescription(page *rod.Page) string {
-	for _, sel := range []string{
-		`[data-e2e="browse-video-desc"]`,
-		`[data-e2e="video-desc"]`,
-		`[data-e2e="new-desc-paragraph"]`,
-	} {
-		if el, err := page.Timeout(2 * time.Second).Element(sel); err == nil {
-			if text, err := el.Text(); err == nil && text != "" {
-				return sanitize(text)
-			}
-		}
-	}
-
-	if el, err := page.Timeout(2 * time.Second).Element(`h1`); err == nil {
-		if text, err := el.Text(); err == nil && text != "" {
-			return sanitize(text)
-		}
-	}
-
-	if el, err := page.Timeout(1 * time.Second).Element(`meta[property="og:description"]`); err == nil {
-		if content, err := el.Attribute("content"); err == nil && content != nil && *content != "" {
-			return sanitize(*content)
-		}
-	}
-
-	return ""
-}
-
-// waitCaptchaResolution aguarda o captcha ser resolvido manualmente via VNC.
-func waitCaptchaResolution(page *rod.Page, timeout time.Duration) error {
-	start := time.Now()
-	for {
-		if time.Since(start) > timeout {
-			return fmt.Errorf("timeout aguardando resolução do captcha")
-		}
-		if !captcha.IsCaptchaPresent(page) {
-			fmt.Println("[Worker] ✅ Captcha resolvido!")
-			return nil
-		}
-		time.Sleep(3 * time.Second)
-	}
-}
+// Removed legacy functions
 
 func truncate(s string, max int) string {
 	if len(s) <= max {

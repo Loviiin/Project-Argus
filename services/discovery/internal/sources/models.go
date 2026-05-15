@@ -3,8 +3,10 @@ package sources
 // DiscoveredVideo contém apenas o ID e URL de um vídeo descoberto (pós-filtro Redis).
 // É o payload mínimo que o Discovery publica no NATS.
 type DiscoveredVideo struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Desc   string `json:"desc"`
+	Author string `json:"author"`
 }
 
 // RawComment representa um comentário com o nick do autor.

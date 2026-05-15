@@ -69,25 +69,12 @@ func main() {
 	defer dedupSv.Close()
 
 	// --- Worker Setup ---
+	proc := worker.NewProcessor(cfg.TikTok.SidecarURL)
+
 	workerIDStr := os.Getenv("WORKER_ID")
 	if workerIDStr == "" {
 		workerIDStr = "1"
 	}
-	workerIDInt := 1
-	fmt.Sscanf(workerIDStr, "%d", &workerIDInt)
-
-	// --- Browser ---
-	browserStateDir := fmt.Sprintf("./browser_state_worker_%s", workerIDStr)
-	debugPort := fmt.Sprintf(":%d", 9222+workerIDInt)
-
-	browser, err := worker.NewBrowser(browserStateDir, debugPort)
-	if err != nil {
-		log.Fatal("Erro ao iniciar browser:", err)
-	}
-	defer browser.Close()
-
-	log.Printf("Browser iniciado com estado em: %s", browserStateDir)
-	log.Printf("⚠️  Se captcha aparecer, resolva via VNC (monitor em %s)", debugPort)
 
 	// --- Subscriber ---
 	// Extendemos o AckWait para 10 minutos para evitar redelivery no meio do scraping de vídeos muito longos
@@ -197,7 +184,7 @@ loop:
 			}
 
 			// Processa o vídeo
-			payload, err := worker.ProcessVideo(browser, job)
+			payload, err := proc.ProcessVideo(ctx, job)
 			if err != nil {
 				log.Printf("[Worker %s] ❌ erro processando %s: %v", workerIDStr, job.VideoID, err)
 				// 2. Exponential Backoff Nak
@@ -207,16 +194,7 @@ loop:
 				return
 			}
 
-			// Se não capturou nenhum comentário, skip e segue para o próximo
-			if payload.Metadata != nil {
-				if comments, ok := payload.Metadata["comments"]; ok {
-					if arr, ok := comments.([]interface{}); ok && len(arr) == 0 {
-						log.Printf("[Worker %s] ⏩ skip (0 comentários): %s", workerIDStr, job.VideoID)
-						m.Ack()
-						return
-					}
-				}
-			}
+			// Ignoramos a verificação de comentários vazios porque agora extraímos a descrição via API
 
 			// Publica o resultado no tópico data.text_extracted
 			data, err := json.Marshal(payload)

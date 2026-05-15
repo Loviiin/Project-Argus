@@ -1,10 +1,11 @@
+//go:build rod
+
 package tiktok
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,11 +129,6 @@ func (s *Source) Close() error {
 	return err
 }
 
-// DiscoveredVideo contém apenas o ID e URL de um vídeo descoberto.
-type DiscoveredVideo struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
-}
 
 // Fetch navega na hashtag page, coleta links de vídeo, filtra pelo Redis (IsNew),
 // e retorna apenas os vídeos ainda não processados.
@@ -334,17 +330,7 @@ func unique(strSlice []string) []string {
 	return result
 }
 
-func extractID(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err == nil {
-		parts := strings.Split(u.Path, "/")
-		if len(parts) > 0 {
-			return parts[len(parts)-1]
-		}
-	}
-	parts := strings.Split(rawURL, "/")
-	return parts[len(parts)-1]
-}
+// extractID movido para shared.go
 
 func parseCount(s string) int {
 	s = strings.TrimSpace(strings.ToUpper(s))
