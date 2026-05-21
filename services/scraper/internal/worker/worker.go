@@ -2,16 +2,20 @@ package worker
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
-	"strings"
+	"net/url"
 	"time"
 
+	"github.com/loviiin/project-argus/pkg/config"
+	"github.com/loviiin/project-argus/pkg/session"
 	"github.com/loviiin/project-argus/pkg/tiktok"
+	"github.com/nats-io/nats.go"
 )
 
 // ScrapeJob é o payload recebido do tópico NATS jobs.scrape.
@@ -21,168 +25,183 @@ type ScrapeJob struct {
 	Hashtag  string `json:"hashtag"`
 	Desc     string `json:"desc"`
 	Author   string `json:"author"`
+	Cursor   int    `json:"cursor"`
+	Count    int    `json:"count"`
 }
 
-// ArtifactPayload é o payload publicado no tópico data.text_extracted.
-type ArtifactPayload struct {
-	SourcePath  string                 `json:"source_path"`
-	TextContent string                 `json:"text_content"`
-	AuthorID    string                 `json:"author_id,omitempty"`
-	SourceType  string                 `json:"source_type,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
-}
-
-// Processor encapsula as dependências para processar vídeos.
+// Processor encapsula as dependências para processar vídeos via Sidecar HTTP API.
 type Processor struct {
-	SidecarURL string
-	HttpClient *http.Client
+	Config  *config.Config
+	session *session.Manager
+	signer  *tiktok.SignerClient
+	db      *sql.DB
+	js      nats.JetStreamContext
 }
 
-func NewProcessor(sidecarURL string) *Processor {
+func NewProcessor(cfg *config.Config, sess *session.Manager, signer *tiktok.SignerClient, db *sql.DB, js nats.JetStreamContext) *Processor {
 	return &Processor{
-		SidecarURL: strings.TrimRight(sidecarURL, "/"),
-		HttpClient: &http.Client{Timeout: 30 * time.Second},
+		Config:  cfg,
+		session: sess,
+		signer:  signer,
+		db:      db,
+		js:      js,
 	}
 }
 
-func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) (*ArtifactPayload, error) {
-	// 1. Extrair links da descrição (já vem no job)
-	descText := job.Desc
-	authorID := job.Author
-	
-	discordLinks := tiktok.ExtractDiscordLinks(descText)
-	
-	// 2. Buscar comentários via Sidecar (API Evil0ctal)
-	log.Printf("[Worker] 💬 Buscando comentários para o vídeo %s...", job.VideoID)
-	comments, err := p.fetchVideoComments(ctx, job.VideoID)
-	if err != nil {
-		log.Printf("[Worker] ⚠️ erro ao buscar comentários para %s: %v", job.VideoID, err)
-		// Continuamos apenas com a descrição se falhar
+func (p *Processor) Close() {
+	if p.db != nil {
+		p.db.Close()
 	}
-
-	var commentTexts []string
-	for _, c := range comments {
-		commentTexts = append(commentTexts, c.Text)
-		// Procurar links nos comentários
-		links := tiktok.ExtractDiscordLinks(c.Text)
-		discordLinks = append(discordLinks, links...)
-	}
-
-	// 3. Agregar tudo num texto único para o Parser
-	fullText := descText
-	if len(commentTexts) > 0 {
-		fullText += "\n\n--- COMMENTS ---\n" + strings.Join(commentTexts, "\n")
-	}
-
-	// Log formatado
-	fmt.Printf("\n[Worker] ✅ Vídeo Processado: %s\n", job.VideoID)
-	fmt.Printf("      👤 Autor: @%s\n", authorID)
-	fmt.Printf("      📝 Descrição: %s\n", truncate(sanitize(descText), 100))
-	fmt.Printf("      💬 Comentários analisados: %d\n", len(comments))
-	if len(discordLinks) > 0 {
-		fmt.Printf("      🎯 Links Discord encontrados: %v\n", discordLinks)
-	}
-
-	// Monta o payload
-	payload := &ArtifactPayload{
-		SourcePath:  job.VideoURL,
-		TextContent: fullText,
-		SourceType:  "tiktok_api_full",
-		AuthorID:    authorID,
-		Metadata: map[string]interface{}{
-			"hashtag":       job.Hashtag,
-			"video_id":      job.VideoID,
-			"author":        authorID,
-			"comment_count": len(comments),
-			"discord_links": discordLinks,
-		},
-	}
-
-	return payload, nil
 }
 
-type commentData struct {
-	Text string `json:"text"`
-}
+func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
+	log.Printf("[Worker] 🚀 Iniciando extração do vídeo %s (Cursor: %d) via Sidecar", job.VideoID, job.Cursor)
 
-func (p *Processor) fetchVideoComments(ctx context.Context, videoID string) ([]commentData, error) {
-	endpoint := fmt.Sprintf("%s/api/tiktok/web/fetch_video_comments?itemId=%s&count=50&cursor=0", p.SidecarURL, videoID)
-	
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
+	if job.Count == 0 {
+		job.Count = 20
 	}
 
-	resp, err := p.HttpClient.Do(req)
+	// 1. Obter uma sessão válida (Cookie + Proxy + UserAgent)
+	sess, err := p.session.GetRandomSession(ctx)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("falha ao obter sessão do Redis: %w", err)
+	}
+
+	// 2. Montar a URL da API oficial do TikTok com todos os fingerprints exigidos
+	apiURL := fmt.Sprintf("https://www.tiktok.com/api/comment/list/?WebIdLastTime=%d&aid=1988&app_language=pt-BR&app_name=tiktok_web&aweme_id=%s&browser_language=pt-BR&browser_name=Mozilla&browser_online=true&browser_platform=MacIntel&browser_version=5.0&channel=tiktok_web&cookie_enabled=true&count=%d&cursor=%d&device_id=7520531026079925774&device_platform=web_pc&focus_state=true&history_len=2&is_fullscreen=false&is_page_visible=true&language=pt-BR&os=mac&priority_region=BR&region=BR&screen_height=1080&screen_width=1920&tz_name=America/Sao_Paulo&webcast_language=pt-BR",
+		time.Now().Unix(), job.VideoID, job.Count, job.Cursor)
+
+	// 3. Chamar o Sidecar para assinar a URL
+	signResp, err := p.signer.SignURL(ctx, apiURL)
+	if err != nil {
+		return fmt.Errorf("falha na assinatura (Sidecar): %w", err)
+	}
+
+	// 4. Configurar o HTTP Client para usar o Proxy da Sessão (se existir)
+	transport := &http.Transport{}
+	if sess.Proxy != "" {
+		proxyURL, err := url.Parse(sess.Proxy)
+		if err != nil {
+			return fmt.Errorf("proxy URL inválida (%s): %w", sess.Proxy, err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+
+	// 5. Executar a requisição GET
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signResp.Data.SignedURL, nil)
+	if err != nil {
+		return fmt.Errorf("erro ao criar requisição HTTP: %w", err)
+	}
+
+	req.Header.Set("User-Agent", signResp.Data.Navigator.UserAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Referer", "https://www.tiktok.com/")
+	req.Header.Set("Cookie", fmt.Sprintf("%s; %s", sess.Cookie, signResp.Data.Cookies))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		// Falha de rede no proxy. Marca a sessão como ruim.
+		log.Printf("[Worker] ⚠️ Proxy %s falhou. Queimando sessão %s", sess.Proxy, sess.ID)
+		p.session.BurnSession(ctx, sess.ID)
+		return fmt.Errorf("falha no proxy: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("sidecar retornou status %d", resp.StatusCode)
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	// Tratamento de Rate Limit ou Shadowban com Fallback
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden || len(bodyBytes) == 0 {
+		log.Printf("[Worker] 🚨 Rate limit ou Shadowban (Status: %d). Tentando fallback /fetch...", resp.StatusCode)
+		
+		fallbackBytes, fetchErr := p.signer.FetchURL(ctx, apiURL)
+		if fetchErr != nil {
+			p.session.BurnSession(ctx, sess.ID)
+			return fmt.Errorf("HTTP %d e falha no fallback /fetch: %w", resp.StatusCode, fetchErr)
+		}
+		bodyBytes = fallbackBytes
+		log.Printf("[Worker] ✅ Fallback /fetch bem-sucedido para vídeo %s", job.VideoID)
+	} else if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status HTTP inesperado: %d", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
-	
-	var envelope struct {
-		Code int `json:"code"`
-		Data struct {
-			Comments []commentData `json:"comments"`
-		} `json:"data"`
+	// 6. Decodificar JSON
+	var tiktokResp struct {
+		Comments []struct {
+			Cid               string `json:"cid"`
+			Text              string `json:"text"`
+			DiggCount         int    `json:"digg_count"`
+			ReplyCommentTotal int    `json:"reply_comment_total"`
+			User              struct {
+				Uid      string `json:"uid"`
+				Nickname string `json:"nickname"`
+			} `json:"user"`
+			CreateTime int64 `json:"create_time"`
+		} `json:"comments"`
+		HasMore int `json:"has_more"`
+		Cursor  int `json:"cursor"`
 	}
 
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, err
+	if err := json.Unmarshal(bodyBytes, &tiktokResp); err != nil {
+		log.Printf("[Worker] 🚨 Não foi possível decodificar JSON. Body: %s", string(bodyBytes))
+		p.session.BurnSession(ctx, sess.ID)
+		return fmt.Errorf("falha ao parsear JSON: %w", err)
 	}
 
-	return envelope.Data.Comments, nil
+	if len(tiktokResp.Comments) == 0 {
+		limit := 500
+		if len(bodyBytes) < 500 {
+			limit = len(bodyBytes)
+		}
+		log.Printf("[Worker] ⚠️ O JSON não contém comentários! Raw: %s", string(bodyBytes[:limit]))
+	}
+
+	// 7. Inserção no PostgreSQL com UPSERT
+	insertedCount := 0
+	for _, c := range tiktokResp.Comments {
+		// UPSERT no PostgreSQL
+		query := `
+			INSERT INTO comments (cid, aweme_id, text, digg_count, reply_comment_total, uid, nickname, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), NOW())
+			ON CONFLICT (cid) DO UPDATE SET
+				digg_count = EXCLUDED.digg_count,
+				reply_comment_total = EXCLUDED.reply_comment_total,
+				updated_at = NOW()
+		`
+		_, err := p.db.ExecContext(ctx, query,
+			c.Cid, job.VideoID, c.Text, c.DiggCount, c.ReplyCommentTotal, c.User.Uid, c.User.Nickname, c.CreateTime)
+		if err != nil {
+			log.Printf("[Worker] ⚠️ Erro ao inserir comentário %s: %v", c.Cid, err)
+		} else {
+			insertedCount++
+		}
+	}
+
+	log.Printf("[Worker] ✅ Inseridos/Atualizados %d comentários (Vídeo: %s)", insertedCount, job.VideoID)
+
+	// 8. Paginação
+	if tiktokResp.HasMore == 1 {
+		log.Printf("[Worker] ⏭️ Vídeo %s possui mais páginas. Publicando Cursor %d no NATS...", job.VideoID, tiktokResp.Cursor)
+		
+		nextJob := job
+		nextJob.Cursor = tiktokResp.Cursor
+		
+		jobData, _ := json.Marshal(nextJob)
+		_, err := p.js.Publish("jobs.scrape", jobData)
+		if err != nil {
+			return fmt.Errorf("falha ao publicar próxima página no NATS: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // RandomDelay aplica um delay aleatório entre min e max segundos.
 func RandomDelay(minSec, maxSec int) {
 	delay := time.Duration(rand.Intn(maxSec-minSec+1)+minSec) * time.Second
-	fmt.Printf("[Worker] ⏳ Delay anti-rate-limit: %v\n", delay)
 	time.Sleep(delay)
-}
-
-// --- Funções auxiliares (movidas do client.go original) ---
-
-// Removed legacy functions
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
-}
-
-func sanitize(s string) string {
-	fields := strings.Fields(s)
-	return strings.Join(fields, " ")
-}
-
-func parseCount(s string) int {
-	s = strings.TrimSpace(strings.ToUpper(s))
-	if s == "" {
-		return 0
-	}
-
-	multiplier := 1.0
-	if strings.HasSuffix(s, "K") {
-		multiplier = 1000.0
-		s = strings.TrimSuffix(s, "K")
-	} else if strings.HasSuffix(s, "M") {
-		multiplier = 1000000.0
-		s = strings.TrimSuffix(s, "M")
-	} else if strings.HasSuffix(s, "B") {
-		multiplier = 1000000000.0
-		s = strings.TrimSuffix(s, "B")
-	}
-
-	s = strings.ReplaceAll(s, ",", ".")
-
-	var val float64
-	fmt.Sscanf(s, "%f", &val)
-	return int(val * multiplier)
 }

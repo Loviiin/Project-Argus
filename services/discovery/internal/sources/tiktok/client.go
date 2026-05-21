@@ -1,4 +1,4 @@
-//go:build rod
+
 
 package tiktok
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/utils"
 	"github.com/go-rod/stealth"
@@ -168,20 +169,12 @@ func (s *Source) Fetch(ctx context.Context, query string) ([]DiscoveredVideo, er
 		return []DiscoveredVideo{{ID: videoID, URL: query}}, nil
 	}
 
-	tagURL := fmt.Sprintf("https://www.tiktok.com/tag/%s", query)
-	fmt.Printf("[Discovery] hashtag: %s\n", tagURL)
-
-	if err := page.Timeout(fetchTimeout).Navigate(tagURL); err != nil {
-		return nil, err
+	// Executa o fluxo de onboarding orgânico e busca
+	if err := s.performOnboarding(page, query); err != nil {
+		fmt.Printf("[Discovery] Erro no onboarding: %v\n", err)
 	}
-	page.Timeout(15 * time.Second).WaitLoad()
+
 	time.Sleep(3 * time.Second)
-
-	if err := page.Reload(); err != nil {
-		fmt.Printf("[Discovery] reload error: %v\n", err)
-	}
-	page.Timeout(15 * time.Second).WaitLoad()
-	time.Sleep(4 * time.Second) // Aumentado para dar tempo ao captcha lazy-load aparecer
 
 	if captcha.IsCaptchaPresent(page) {
 		if err := s.handleCaptcha(page, query); err != nil {
@@ -291,32 +284,7 @@ func (s *Source) collectVideoURLs(page *rod.Page) []string {
 	return urls
 }
 
-func (s *Source) handleCaptcha(page *rod.Page, ctxStr string) error {
-	captchaType := detectCaptchaType(page)
-	fmt.Printf("[%s] [Captcha] tipo: %s\n", ctxStr, captchaType)
 
-	var err error
-	switch captchaType {
-	case CaptchaTypeRotate:
-		err = handleRotateCaptcha(page, ctxStr)
-	case CaptchaTypePuzzle:
-		err = handlePuzzleCaptcha(page)
-	default:
-		err = waitCaptchaResolution(page, 5*time.Minute)
-	}
-
-	if err != nil {
-		return fmt.Errorf("captcha: %w", err)
-	}
-
-	time.Sleep(3 * time.Second)
-
-	if captcha.IsCaptchaPresent(page) {
-		return ErrCaptcha
-	}
-
-	return nil
-}
 
 func unique(strSlice []string) []string {
 	seen := make(map[string]bool)
@@ -328,6 +296,84 @@ func unique(strSlice []string) []string {
 		}
 	}
 	return result
+}
+
+func (s *Source) performOnboarding(page *rod.Page, query string) error {
+	fmt.Printf("[Discovery] ☕ Iniciando onboarding orgânico...\n")
+	
+	// 1. Google Referer
+	page.Timeout(10 * time.Second).Navigate("https://www.google.com")
+	time.Sleep(2 * time.Second)
+	
+	// 2. Navega para a raiz do TikTok
+	page.Timeout(15 * time.Second).Navigate("https://www.tiktok.com")
+	page.Timeout(15 * time.Second).WaitLoad()
+	time.Sleep(4 * time.Second)
+
+	// Lidar com CAPTCHA se aparecer cedo
+	if captcha.IsCaptchaPresent(page) {
+		s.handleCaptcha(page, "onboarding-raiz")
+	}
+
+	// 3. Tenta encontrar e clicar em "Pular" ou "Continuar como convidado"
+	if el, err := page.Timeout(3 * time.Second).ElementX(`//*[contains(text(), "Pular") or contains(text(), "Continuar como convidado") or contains(text(), "Continue as guest")]`); err == nil {
+		fmt.Printf("[Discovery] 🖱️ Botão 'Pular' encontrado. Clicando...\n")
+		el.Click("left", 1)
+		time.Sleep(2 * time.Second)
+	}
+
+	// 4. Tenta encontrar e preencher modal de Aniversário
+	if el, err := page.Timeout(3 * time.Second).ElementX(`//*[contains(text(), "Quando é seu aniversário") or contains(text(), "When’s your birthday")]`); err == nil && el != nil {
+		fmt.Printf("[Discovery] 🎂 Modal de Aniversário detectado. Tentando preencher...\n")
+		
+		// Tentar fechar o modal ou clicar fora se for bloqueante
+		page.Keyboard.Press(input.Escape)
+		time.Sleep(1 * time.Second)
+
+		// Buscar dropdowns
+		combos, err := page.Elements(`div[role="combobox"], select`)
+		if err == nil && len(combos) >= 3 {
+			combos[2].Click("left", 1) // O Ano geralmente é o terceiro
+			time.Sleep(1 * time.Second)
+			
+			if option, err := page.ElementR("li, div, option", "1995"); err == nil {
+				option.Click("left", 1)
+			} else {
+				page.Keyboard.Press(input.ArrowDown)
+				page.Keyboard.Press(input.Enter)
+			}
+			time.Sleep(1 * time.Second)
+			
+			if btn, err := page.ElementX(`//button[contains(text(), "Avançar") or contains(text(), "Next")]`); err == nil {
+				btn.Click("left", 1)
+				time.Sleep(3 * time.Second)
+			}
+		}
+	}
+
+	if captcha.IsCaptchaPresent(page) {
+		s.handleCaptcha(page, "onboarding-pos-niver")
+	}
+
+	// 5. Usa a barra de busca orgânica em vez de navegar direto pela URL
+	fmt.Printf("[Discovery] 🔍 Buscando organicamente pela hashtag: #%s\n", query)
+	if searchInput, err := page.Timeout(5 * time.Second).Element(`input[type="search"]`); err == nil {
+		searchInput.Click("left", 1)
+		searchInput.Input("#" + query)
+		time.Sleep(1 * time.Second)
+		page.Keyboard.Press(input.Enter)
+		
+		page.Timeout(15 * time.Second).WaitLoad()
+		time.Sleep(5 * time.Second)
+	} else {
+		fmt.Printf("[Discovery] ⚠️ Barra de busca não encontrada. Fallback para URL direta...\n")
+		tagURL := fmt.Sprintf("https://www.tiktok.com/tag/%s", query)
+		page.Timeout(15 * time.Second).Navigate(tagURL)
+		page.Timeout(15 * time.Second).WaitLoad()
+		time.Sleep(4 * time.Second)
+	}
+
+	return nil
 }
 
 // extractID movido para shared.go

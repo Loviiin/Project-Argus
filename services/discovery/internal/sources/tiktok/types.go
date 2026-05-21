@@ -1,4 +1,4 @@
-//go:build rod
+
 
 package tiktok
 
@@ -43,31 +43,7 @@ type CaptchaSolution struct {
 	Error     string  `json:"error"`      // Mensagem de erro, se houver
 }
 
-// SadCaptchaRotateRequest é o JSON enviado para a API do SadCaptcha (Rotate)
-type SadCaptchaRotateRequest struct {
-	OuterImageB64 string `json:"outerImageB64"` // Imagem externa em Base64
-	InnerImageB64 string `json:"innerImageB64"` // Imagem interna em Base64
-}
-
-// SadCaptchaPuzzleRequest é o JSON enviado para a API do SadCaptcha (Puzzle)
-type SadCaptchaPuzzleRequest struct {
-	PuzzleImageB64 string `json:"puzzleImageB64"` // Imagem do puzzle em Base64
-	PieceImageB64  string `json:"pieceImageB64"`  // Imagem da peça em Base64
-}
-
-// SadCaptchaRotateResponse representa a resposta da API para captcha Rotate
-type SadCaptchaRotateResponse struct {
-	Angle   float64 `json:"angle"`             // Ângulo da solução (0 a 360)
-	ErrorID int     `json:"errorId,omitempty"` // ID do erro, se houver
-	Message string  `json:"message,omitempty"` // Mensagem de erro
-}
-
-// SadCaptchaPuzzleResponse representa a resposta da API para captcha Puzzle
-type SadCaptchaPuzzleResponse struct {
-	Slide   float64 `json:"slide"`             // Distância em pixels para arrastar
-	ErrorID int     `json:"errorId,omitempty"` // ID do erro, se houver
-	Message string  `json:"message,omitempty"` // Mensagem de erro
-}
+// Removido SadCaptcha structs
 
 // CaptchaType representa o tipo de captcha detectado
 type CaptchaType int
@@ -76,6 +52,7 @@ const (
 	CaptchaTypeUnknown CaptchaType = iota
 	CaptchaTypeRotate              // Captcha de rotação (alinhar círculos)
 	CaptchaTypePuzzle              // Captcha de quebra-cabeça (encaixar peça)
+	CaptchaTypeSoftGate            // Captcha overlay que pode ser fechado
 )
 
 func (ct CaptchaType) String() string {
@@ -96,8 +73,6 @@ var (
 	ErrCaptchaTimeout = errors.New("timeout ao aguardar resolução do captcha")
 	// ErrCaptchaNotFound indica que os elementos do captcha não foram encontrados
 	ErrCaptchaNotFound = errors.New("elementos do captcha não encontrados na página")
-	// ErrSadCaptchaAPIKey indica que a API key do SadCaptcha não foi configurada
-	ErrSadCaptchaAPIKey = errors.New("SADCAPTCHA_API_KEY não configurada")
-	// ErrSadCaptchaFailed indica que a API do SadCaptcha retornou erro
-	ErrSadCaptchaFailed = errors.New("API do SadCaptcha falhou")
+	// ErrCaptchaDismissed indica que o CAPTCHA foi descartado (não resolvido, overlay fechado)
+	ErrCaptchaDismissed = errors.New("captcha dismissed via close/ESC")
 )

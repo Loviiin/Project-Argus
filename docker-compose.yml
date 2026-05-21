@@ -51,13 +51,15 @@ services:
     restart: unless-stopped
 
   tiktok-signer:
-    image: evil0ctal/douyin_tiktok_download_api:latest
+    build: ./services/sidecar
     container_name: tiktok-signer
     ports:
-      - "8000:80"
+      - "8080:8080"
     restart: unless-stopped
     environment:
       - TZ=America/Sao_Paulo
+      - PORT=8080
+      - PROXY_ENABLED=false
 
 volumes:
   postgres_data:

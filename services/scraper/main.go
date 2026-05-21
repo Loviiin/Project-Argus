@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,8 +15,11 @@ import (
 
 	"scraper/internal/worker"
 
+	_ "github.com/lib/pq"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/loviiin/project-argus/pkg/session"
+	"github.com/loviiin/project-argus/pkg/tiktok"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 )
@@ -23,10 +27,7 @@ import (
 func main() {
 	cfg := config.LoadConfig()
 
-	fmt.Println("Argus Scraper Worker (Subscriber) iniciando...")
-
-	// Inicia rotina do Garbage Collector de perfis no background
-	go worker.StartProfileSweeper()
+	fmt.Println("Argus Scraper Worker (Subscriber) iniciando (Arquitetura Sidecar)...")
 
 	// --- NATS ---
 	nc, err := nats.Connect(cfg.Nats.URL)
@@ -49,16 +50,6 @@ func main() {
 		log.Printf("Stream SCRAPE: %v (ok se já existe)", err)
 	}
 
-	// Garante que o stream DATA exista para data.text_extracted
-	_, err = js.AddStream(&nats.StreamConfig{
-		Name:     "DATA",
-		Subjects: []string{"data.text_extracted"},
-		Storage:  nats.FileStorage,
-	})
-	if err != nil {
-		log.Printf("Stream DATA: %v (ok se já existe)", err)
-	}
-
 	// --- Redis ---
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.Redis.Address,
@@ -68,8 +59,24 @@ func main() {
 	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
 	defer dedupSv.Close()
 
+	sessionManager := session.NewManager(rdb)
+
+	// --- PostgreSQL ---
+	db, err := sql.Open("postgres", cfg.Database.URL)
+	if err != nil {
+		log.Fatal("Erro conexão PostgreSQL:", err)
+	}
+	if err = db.Ping(); err != nil {
+		log.Fatal("Erro ping PostgreSQL:", err)
+	}
+	defer db.Close()
+
+	// --- TikTok Signer Client ---
+	signerClient := tiktok.NewSignerClient(cfg.TikTok.SidecarURL)
+
 	// --- Worker Setup ---
-	proc := worker.NewProcessor(cfg.TikTok.SidecarURL)
+	proc := worker.NewProcessor(cfg, sessionManager, signerClient, db, js)
+	defer proc.Close()
 
 	workerIDStr := os.Getenv("WORKER_ID")
 	if workerIDStr == "" {
@@ -77,7 +84,6 @@ func main() {
 	}
 
 	// --- Subscriber ---
-	// Extendemos o AckWait para 10 minutos para evitar redelivery no meio do scraping de vídeos muito longos
 	sub, err := js.PullSubscribe("jobs.scrape", "scraper-worker-group", nats.AckWait(10*time.Minute))
 	if err != nil {
 		log.Fatal("Erro ao criar pull subscriber:", err)
@@ -98,7 +104,11 @@ func main() {
 		cancel()
 	}()
 
-	sem := make(chan struct{}, 1) // Max 1 browser simultâneo por worker
+	numWorkers := cfg.Scraper.Workers
+	if numWorkers <= 0 {
+		numWorkers = 1
+	}
+	sem := make(chan struct{}, numWorkers) // Max goroutines para chamadas de API
 	var wg sync.WaitGroup
 
 loop:
@@ -142,27 +152,19 @@ loop:
 				return
 			}
 
-			log.Printf("[Worker %s] 📥 Recebido job: %s (%s) [Tentativa: %d]", workerIDStr, job.VideoID, job.Hashtag, meta.NumDelivered)
+			log.Printf("[Worker %s] 📥 Recebido job: %s (Cursor: %d) [Tentativa: %d]", workerIDStr, job.VideoID, job.Cursor, meta.NumDelivered)
 
 			// 1. Worker Heartbeat/Processing Lock
-			lockKey := fmt.Sprintf("argus:processing_lock:%s", job.VideoID)
+			lockKey := fmt.Sprintf("argus:processing_lock:%s:%d", job.VideoID, job.Cursor)
 			if locked, _ := dedupSv.RDB().SetNX(ctx, lockKey, "1", 10*time.Minute).Result(); !locked {
 				delay := time.Duration(30+rand.Intn(30)) * time.Second
-				log.Printf("[Worker %s] Job %s bloqueado por lock. Nak + Jitter: %v", workerIDStr, job.VideoID, delay)
+				log.Printf("[Worker %s] Job %s (Cursor: %d) bloqueado por lock. Nak + Jitter: %v", workerIDStr, job.VideoID, job.Cursor, delay)
 				m.NakWithDelay(delay)
 				return
 			}
 			defer dedupSv.RDB().Del(ctx, lockKey)
 
-			// 2. Padrão de Idempotência Definitiva
-			processed, err := dedupSv.CheckIfProcessed(ctx, "processed_job", job.VideoID)
-			if err == nil && processed {
-				log.Printf("[Worker %s] Mensagem duplicada ignorada: %s", workerIDStr, job.VideoID)
-				m.Ack()
-				return
-			}
-
-			// 3. Dead Letter Queue (DLQ)
+			// 2. Dead Letter Queue (DLQ)
 			if meta.NumDelivered > 15 {
 				log.Printf("[Worker %s] 🚨 Max Retries atingido para %s. Enviando para DLQ...", workerIDStr, job.VideoID)
 				dlqPayload := map[string]interface{}{
@@ -183,44 +185,18 @@ loop:
 				return
 			}
 
-			// Processa o vídeo
-			payload, err := proc.ProcessVideo(ctx, job)
+			// Processa o vídeo via Sidecar HTTP
+			err = proc.ProcessVideo(ctx, job)
 			if err != nil {
 				log.Printf("[Worker %s] ❌ erro processando %s: %v", workerIDStr, job.VideoID, err)
-				// 2. Exponential Backoff Nak
-				delay := time.Duration(10+rand.Intn(20)) * time.Second // Jittered delay
+				// Exponential Backoff Nak
+				delay := time.Duration(10+rand.Intn(20)) * time.Second
 				log.Printf("[Worker %s] ⏳ Nak no job %s com delay de %v", workerIDStr, job.VideoID, delay)
 				m.NakWithDelay(delay)
 				return
 			}
 
-			// Ignoramos a verificação de comentários vazios porque agora extraímos a descrição via API
-
-			// Publica o resultado no tópico data.text_extracted
-			data, err := json.Marshal(payload)
-			if err != nil {
-				log.Printf("[Worker %s] ❌ erro marshal payload %s: %v", workerIDStr, job.VideoID, err)
-				delay := time.Duration(10+rand.Intn(20)) * time.Second // Jittered delay
-				m.NakWithDelay(delay)
-				return
-			}
-
-			_, err = js.Publish("data.text_extracted", data)
-			if err != nil {
-				log.Printf("[Worker %s] ❌ erro publicar resultado %s: %v", workerIDStr, job.VideoID, err)
-				delay := time.Duration(10+rand.Intn(20)) * time.Second // Jittered delay
-				m.NakWithDelay(delay)
-				return
-			}
-
-			log.Printf("[Worker %s] ✅ Publicado: %s → data.text_extracted", workerIDStr, job.VideoID)
-
-			// Só marca como visto DEPOIS do publish com sucesso (Idempotência final)
-			if err := dedupSv.MarkAsSeen(ctx, "processed_job", job.VideoID); err != nil {
-				log.Printf("[Worker %s] ⚠️  erro redis MarkAsSeen %s: %v", workerIDStr, job.VideoID, err)
-			}
-
-			// Ack → confirma processamento bem-sucedido
+			// Ack → confirma processamento bem-sucedido e dados inseridos no PG
 			m.Ack()
 
 			// Delay anti-rate-limit entre jobs (3-8 segundos) para não estressar logo após

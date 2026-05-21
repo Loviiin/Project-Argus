@@ -55,9 +55,9 @@ func main() {
 		sidecarURL = "http://localhost:8000"
 	}
 
-	// Estágio 1: Broad Discovery — busca por hashtag com ttwid + tls-client
-	log.Printf("Inicializando Stage 1 (Hashtag Discovery) — sidecar: %s", sidecarURL)
-	stage1 := sources.NewTikTokHTTPSource(sidecarURL, cfg.TikTok.Ttwid, dedupSv)
+	// Estágio 1: Broad Discovery — busca por hashtag usando Browser (Rod) para bypass do Captcha
+	log.Printf("Inicializando Stage 1 (Hashtag Discovery via Browser/Rod)")
+	stage1 := sources.NewTikTokRodSourceAdapter(dedupSv)
 
 	// Estágio 2: Target Tracking — monitora contas via Evil0ctal
 	log.Printf("Inicializando Stage 2 (User Tracker) — %d conta(s) seed", len(cfg.TikTok.TargetAccounts))
