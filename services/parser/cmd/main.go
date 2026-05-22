@@ -324,7 +324,7 @@ func main() {
 			"invite_code":  job.InviteCode,
 			"invite_link":  "https://discord.gg/" + job.InviteCode,
 			"server_name":  inviteInfo.Guild.Name,
-			"icon":         iconURL,
+			"image":        iconURL,
 			"member_count": inviteInfo.ApproximateMemberCount,
 			"status":       "active",
 		})
