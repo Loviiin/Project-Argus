@@ -61,14 +61,48 @@ services:
       - PORT=8080
       - PROXY_ENABLED=false
 
+  argus-discovery:
+    build:
+      context: .
+      dockerfile: ./services/discovery/Dockerfile
+    container_name: argus-discovery
+    restart: unless-stopped
+    volumes:
+      - ./config:/workspaces/Project-Argus/config
+    depends_on:
+      - nats
+      - argus-cache
+      - tiktok-signer
+
+  argus-scraper:
+    build:
+      context: .
+      dockerfile: ./services/scraper/Dockerfile
+    container_name: argus-scraper
+    restart: unless-stopped
+    volumes:
+      - ./config:/workspaces/Project-Argus/config
+    depends_on:
+      - nats
+      - argus-db
+      - tiktok-signer
+
+  argus-parser:
+    build:
+      context: .
+      dockerfile: ./services/parser/Dockerfile
+    container_name: argus-parser
+    restart: unless-stopped
+    volumes:
+      - ./config:/workspaces/Project-Argus/config
+    depends_on:
+      - nats
+      - argus-db
+      - argus-cache
+      - argus-meili
+
 volumes:
   postgres_data:
   nats_data:
   redis_data:
   meili_data:
-  argus_temp_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${PWD}/tmp_data
