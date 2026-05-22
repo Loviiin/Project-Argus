@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Artifact struct {
@@ -21,11 +21,11 @@ type Artifact struct {
 }
 
 type ArtifactRepository struct {
-	db *pgx.Conn
+	db *pgxpool.Pool
 }
 
 func NewArtifactRepository(databaseURL string) (*ArtifactRepository, error) {
-	conn, err := pgx.Connect(context.Background(), databaseURL)
+	conn, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao conectar no postgres: %w", err)
 	}
@@ -37,7 +37,7 @@ func NewArtifactRepository(databaseURL string) (*ArtifactRepository, error) {
 	repo := &ArtifactRepository{db: conn}
 
 	if err := repo.runMigrations(); err != nil {
-		conn.Close(context.Background())
+		conn.Close()
 		return nil, fmt.Errorf("falha ao rodar migrations: %w", err)
 	}
 
@@ -91,5 +91,5 @@ func (r *ArtifactRepository) UpdateEnrichedData(ctx context.Context, inviteCode,
 }
 
 func (r *ArtifactRepository) Close(ctx context.Context) {
-	r.db.Close(ctx)
+	r.db.Close()
 }

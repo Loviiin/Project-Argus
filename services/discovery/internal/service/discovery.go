@@ -88,18 +88,7 @@ func (s *DiscoveryService) Run(hashtags []string) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	for _, src := range s.sources {
-		if src.Name() == "TikTok-User-Tracker" {
-			trackerTag := "@tracked_accounts"
-			log.Printf("[%s] buscando via %s (1 execução por ciclo)", trackerTag, src.Name())
-			videos, err := src.Fetch(ctx, "")
-			if err != nil {
-				log.Printf("[%s] erro: %v", trackerTag, err)
-				continue
-			}
-			log.Printf("[%s] %d vídeos novos descobertos", trackerTag, len(videos))
-			s.publishJobs(ctx, trackerTag, videos)
-			continue
-		}
+
 
 		for i, tag := range hashtags {
 			if i > 0 {
@@ -143,6 +132,10 @@ func (s *DiscoveryService) publishJobs(ctx context.Context, tag string, videos [
 		} else {
 			log.Printf("[%s] ✅ job publicado: %s → jobs.scrape", tag, v.ID)
 			s.rdb.Incr(ctx, "argus:metrics:discovery:enqueued")
+			
+			// Mark as seen so the next cycle doesn't publish it again
+			key := "argus:processed_job:" + v.ID
+			s.rdb.Set(ctx, key, "1", 48*time.Hour)
 		}
 	}
 }

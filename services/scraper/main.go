@@ -18,7 +18,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
-	"github.com/loviiin/project-argus/pkg/session"
 	"github.com/loviiin/project-argus/pkg/tiktok"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
@@ -59,8 +58,6 @@ func main() {
 	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
 	defer dedupSv.Close()
 
-	sessionManager := session.NewManager(rdb)
-
 	// --- PostgreSQL ---
 	db, err := sql.Open("postgres", cfg.Database.URL)
 	if err != nil {
@@ -75,7 +72,7 @@ func main() {
 	signerClient := tiktok.NewSignerClient(cfg.TikTok.SidecarURL)
 
 	// --- Worker Setup ---
-	proc := worker.NewProcessor(cfg, sessionManager, signerClient, db, js)
+	proc := worker.NewProcessor(cfg, signerClient, db, js)
 	defer proc.Close()
 
 	workerIDStr := os.Getenv("WORKER_ID")

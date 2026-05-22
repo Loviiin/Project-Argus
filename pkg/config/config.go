@@ -13,10 +13,6 @@ type Config struct {
 		Env string `yaml:"env"`
 	} `yaml:"app"`
 
-	Browser struct {
-		Headless bool `yaml:"headless"`
-	} `yaml:"browser"`
-
 	Discovery struct {
 		Hashtags []string `yaml:"hashtags"`
 		Interval int      `yaml:"interval_seconds"`
@@ -27,10 +23,8 @@ type Config struct {
 		// Cookie de sessão anónima. Obter em tiktok.com > F12 > Cookies > ttwid.
 		// Dura ~30-60 dias. Não requer conta TikTok.
 		Ttwid string `yaml:"ttwid"`
-		// URL base do sidecar Evil0ctal (Docker local)
+		// URL base do sidecar
 		SidecarURL string `yaml:"sidecar_url"`
-		// Contas a monitorar no Estágio 2 (complementado automaticamente pelo Redis)
-		TargetAccounts []string `yaml:"target_accounts"`
 	} `yaml:"tiktok"`
 
 	Nats struct {
@@ -38,8 +32,7 @@ type Config struct {
 	} `yaml:"nats"`
 
 	Scraper struct {
-		Workers         int    `yaml:"workers"`
-		BrowserStateDir string `yaml:"browser_state_dir"`
+		Workers int `yaml:"workers"`
 	} `yaml:"scraper"`
 
 	Redis struct {
@@ -60,9 +53,8 @@ type Config struct {
 	} `yaml:"meilisearch"`
 
 	Discord struct {
-		FetchMode string `yaml:"fetch_mode"`
-		Token     string `yaml:"token"` // opcional
-		ProxyURL  string `yaml:"proxy"` // opcional, formato: http://user:pass@ip:port
+		Token    string `yaml:"token"` // opcional
+		ProxyURL string `yaml:"proxy"` // opcional, formato: http://user:pass@ip:port
 	} `yaml:"discord"`
 }
 

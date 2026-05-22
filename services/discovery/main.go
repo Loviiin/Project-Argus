@@ -52,18 +52,14 @@ func main() {
 		sidecarURL = v // override via env (Docker)
 	}
 	if sidecarURL == "" {
-		sidecarURL = "http://localhost:8000"
+		sidecarURL = "http://localhost:8080"
 	}
 
-	// Estágio 1: Broad Discovery — busca por hashtag usando Browser (Rod) para bypass do Captcha
-	log.Printf("Inicializando Stage 1 (Hashtag Discovery via Browser/Rod)")
-	stage1 := sources.NewTikTokRodSourceAdapter(dedupSv)
+	// Estágio 1: Broad Discovery — busca por hashtag usando a API via Sidecar
+	log.Printf("Inicializando Stage 1 (Hashtag Discovery via Sidecar API)")
+	stage1 := sources.NewTikTokSignatureSearch(sidecarURL, dedupSv)
 
-	// Estágio 2: Target Tracking — monitora contas via Evil0ctal
-	log.Printf("Inicializando Stage 2 (User Tracker) — %d conta(s) seed", len(cfg.TikTok.TargetAccounts))
-	stage2 := sources.NewTikTokUserSource(sidecarURL, cfg.TikTok.TargetAccounts, rdb, dedupSv)
-
-	svc := service.NewDiscoveryService(js, rdb, []sources.Source{stage1, stage2}, cfg.Discovery.Workers)
+	svc := service.NewDiscoveryService(js, rdb, []sources.Source{stage1}, cfg.Discovery.Workers)
 
 	interval := time.Duration(cfg.Discovery.Interval) * time.Second
 	if interval == 0 {

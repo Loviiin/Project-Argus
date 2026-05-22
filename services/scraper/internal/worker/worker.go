@@ -9,11 +9,10 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"net/url"
+	"strings"
 	"time"
 
 	"github.com/loviiin/project-argus/pkg/config"
-	"github.com/loviiin/project-argus/pkg/session"
 	"github.com/loviiin/project-argus/pkg/tiktok"
 	"github.com/nats-io/nats.go"
 )
@@ -32,16 +31,14 @@ type ScrapeJob struct {
 // Processor encapsula as dependências para processar vídeos via Sidecar HTTP API.
 type Processor struct {
 	Config  *config.Config
-	session *session.Manager
 	signer  *tiktok.SignerClient
 	db      *sql.DB
 	js      nats.JetStreamContext
 }
 
-func NewProcessor(cfg *config.Config, sess *session.Manager, signer *tiktok.SignerClient, db *sql.DB, js nats.JetStreamContext) *Processor {
+func NewProcessor(cfg *config.Config, signer *tiktok.SignerClient, db *sql.DB, js nats.JetStreamContext) *Processor {
 	return &Processor{
 		Config:  cfg,
-		session: sess,
 		signer:  signer,
 		db:      db,
 		js:      js,
@@ -61,38 +58,20 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		job.Count = 20
 	}
 
-	// 1. Obter uma sessão válida (Cookie + Proxy + UserAgent)
-	sess, err := p.session.GetRandomSession(ctx)
-	if err != nil {
-		return fmt.Errorf("falha ao obter sessão do Redis: %w", err)
-	}
-
-	// 2. Montar a URL da API oficial do TikTok com todos os fingerprints exigidos
 	apiURL := fmt.Sprintf("https://www.tiktok.com/api/comment/list/?WebIdLastTime=%d&aid=1988&app_language=pt-BR&app_name=tiktok_web&aweme_id=%s&browser_language=pt-BR&browser_name=Mozilla&browser_online=true&browser_platform=MacIntel&browser_version=5.0&channel=tiktok_web&cookie_enabled=true&count=%d&cursor=%d&device_id=7520531026079925774&device_platform=web_pc&focus_state=true&history_len=2&is_fullscreen=false&is_page_visible=true&language=pt-BR&os=mac&priority_region=BR&region=BR&screen_height=1080&screen_width=1920&tz_name=America/Sao_Paulo&webcast_language=pt-BR",
 		time.Now().Unix(), job.VideoID, job.Count, job.Cursor)
 
-	// 3. Chamar o Sidecar para assinar a URL
+	// 1. Obter a assinatura via Sidecar
 	signResp, err := p.signer.SignURL(ctx, apiURL)
 	if err != nil {
 		return fmt.Errorf("falha na assinatura (Sidecar): %w", err)
 	}
 
-	// 4. Configurar o HTTP Client para usar o Proxy da Sessão (se existir)
-	transport := &http.Transport{}
-	if sess.Proxy != "" {
-		proxyURL, err := url.Parse(sess.Proxy)
-		if err != nil {
-			return fmt.Errorf("proxy URL inválida (%s): %w", sess.Proxy, err)
-		}
-		transport.Proxy = http.ProxyURL(proxyURL)
-	}
-	
 	client := &http.Client{
-		Transport: transport,
-		Timeout:   10 * time.Second,
+		Timeout: 10 * time.Second,
 	}
 
-	// 5. Executar a requisição GET
+	// 2. Executar a requisição GET
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signResp.Data.SignedURL, nil)
 	if err != nil {
 		return fmt.Errorf("erro ao criar requisição HTTP: %w", err)
@@ -101,14 +80,11 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 	req.Header.Set("User-Agent", signResp.Data.Navigator.UserAgent)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Referer", "https://www.tiktok.com/")
-	req.Header.Set("Cookie", fmt.Sprintf("%s; %s", sess.Cookie, signResp.Data.Cookies))
+	req.Header.Set("Cookie", signResp.Data.Cookies)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		// Falha de rede no proxy. Marca a sessão como ruim.
-		log.Printf("[Worker] ⚠️ Proxy %s falhou. Queimando sessão %s", sess.Proxy, sess.ID)
-		p.session.BurnSession(ctx, sess.ID)
-		return fmt.Errorf("falha no proxy: %w", err)
+		return fmt.Errorf("falha na requisição direta: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -120,7 +96,6 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		
 		fallbackBytes, fetchErr := p.signer.FetchURL(ctx, apiURL)
 		if fetchErr != nil {
-			p.session.BurnSession(ctx, sess.ID)
 			return fmt.Errorf("HTTP %d e falha no fallback /fetch: %w", resp.StatusCode, fetchErr)
 		}
 		bodyBytes = fallbackBytes
@@ -148,7 +123,6 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 
 	if err := json.Unmarshal(bodyBytes, &tiktokResp); err != nil {
 		log.Printf("[Worker] 🚨 Não foi possível decodificar JSON. Body: %s", string(bodyBytes))
-		p.session.BurnSession(ctx, sess.ID)
 		return fmt.Errorf("falha ao parsear JSON: %w", err)
 	}
 
@@ -178,6 +152,20 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 			log.Printf("[Worker] ⚠️ Erro ao inserir comentário %s: %v", c.Cid, err)
 		} else {
 			insertedCount++
+		}
+
+		// Publicar no NATS para o Parser caso o comentário possa conter um link de Discord
+		lowerText := strings.ToLower(c.Text)
+		if strings.Contains(lowerText, "discord") || strings.Contains(lowerText, "gg/") {
+			ocrMsg := map[string]interface{}{
+				"source_path":  fmt.Sprintf("https://www.tiktok.com/@%s/video/%s#comment-%s", c.User.Nickname, job.VideoID, c.Cid),
+				"text_content": c.Text,
+				"author_id":    c.User.Nickname,
+			}
+			data, _ := json.Marshal(ocrMsg)
+			if _, pubErr := p.js.Publish("data.text_extracted", data); pubErr != nil {
+				log.Printf("[Worker] ⚠️ Erro ao publicar comentário no NATS para o parser: %v", pubErr)
+			}
 		}
 	}
 

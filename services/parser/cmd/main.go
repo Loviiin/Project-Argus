@@ -70,10 +70,20 @@ func main() {
 		fmt.Printf("Stream ENRICH check: %v\n", err)
 	}
 
+	// Garantir que o stream de extração de texto exista
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name:     "TEXT_EXTRACTED",
+		Subjects: []string{"data.text_extracted"},
+		Storage:  nats.FileStorage,
+	})
+	if err != nil {
+		fmt.Printf("Stream TEXT_EXTRACTED check: %v\n", err)
+	}
+
 	fmt.Println("Parser Service Iniciado. Rodando Fast Ingestion Flow & Discord Enricher Flow...")
 
 	finder := logic.NewDiscordFinder()
-	discordClient := client.NewDiscordClient(cfg.Discord.FetchMode, cfg.Discord.ProxyURL, cfg.Discord.Token, rdb)
+	discordClient := client.NewDiscordClient(cfg.Discord.ProxyURL, cfg.Discord.Token, rdb)
 
 	// ==========================================
 	// 1. FAST INGESTION FLOW
@@ -174,6 +184,7 @@ func main() {
 
 				err = indexer.IndexData(map[string]interface{}{
 					"invite_code":         inviteCode,
+					"invite_link":         "https://discord.gg/" + inviteCode,
 					"source_url":          payload.SourcePath,
 					"timestamp_formatted": nowSP.Format("02/01/2006 15:04:05"),
 					"status":              "pending",
@@ -311,6 +322,7 @@ func main() {
 
 		err = indexer.UpdateData(map[string]interface{}{
 			"invite_code":  job.InviteCode,
+			"invite_link":  "https://discord.gg/" + job.InviteCode,
 			"server_name":  inviteInfo.Guild.Name,
 			"icon":         iconURL,
 			"member_count": inviteInfo.ApproximateMemberCount,
