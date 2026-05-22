@@ -967,9 +967,11 @@ async function handleRequest(req, res) {
       }
 
       let targetUrl = null;
+      let requestCookies = null;
       try {
         const json = JSON.parse(body);
         targetUrl = json.url;
+        requestCookies = json.cookies;
       } catch (e) {
         try {
           new URL(body.trim());
@@ -987,6 +989,21 @@ async function handleRequest(req, res) {
 
       await initBrowser();
       await ensurePageReady();
+
+      if (requestCookies) {
+        try {
+          const cookiePairs = requestCookies.split(';').map(c => c.trim().split('='));
+          for (const [name, ...rest] of cookiePairs) {
+            const value = rest.join('=');
+            if (name && value) {
+              await page.setCookie({ name, value, domain: '.tiktok.com' });
+            }
+          }
+          console.log("[Server] Injected cookies into browser context");
+        } catch (e) {
+          console.log("[Server] Failed to inject cookies:", e.message);
+        }
+      }
 
       console.log(
         "[Server] Fetching through browser:",

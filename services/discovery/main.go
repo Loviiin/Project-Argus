@@ -57,7 +57,7 @@ func main() {
 
 	// Estágio 1: Broad Discovery — busca por hashtag usando a API via Sidecar
 	log.Printf("Inicializando Stage 1 (Hashtag Discovery via Sidecar API)")
-	stage1 := sources.NewTikTokSignatureSearch(sidecarURL, dedupSv)
+	stage1 := sources.NewTikTokSignatureSearch(sidecarURL, cfg.TikTok.Ttwid, dedupSv)
 
 	svc := service.NewDiscoveryService(js, rdb, []sources.Source{stage1}, cfg.Discovery.Workers)
 

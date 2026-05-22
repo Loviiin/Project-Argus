@@ -41,6 +41,20 @@ func (r *ArtifactRepository) runMigrations() error {
 			name:  "004_add_discord_status",
 			query: "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS discord_status VARCHAR(50) DEFAULT 'pending';",
 		},
+		{
+			name: "005_create_comments_table",
+			query: `CREATE TABLE IF NOT EXISTS comments (
+				cid VARCHAR(100) PRIMARY KEY,
+				aweme_id VARCHAR(100) NOT NULL,
+				text TEXT,
+				digg_count INT DEFAULT 0,
+				reply_comment_total INT DEFAULT 0,
+				uid VARCHAR(100),
+				nickname VARCHAR(255),
+				created_at TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT NOW()
+			);`,
+		},
 	}
 
 	for _, m := range queries {

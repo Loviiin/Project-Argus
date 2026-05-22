@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -17,13 +18,15 @@ import (
 type TikTokSignatureSearch struct {
 	dedup  *dedup.Deduplicator
 	signer *pkgtiktok.SignerClient
+	ttwid  string
 }
 
 // NewTikTokSignatureSearch creates a new instance of the signature-based search source.
-func NewTikTokSignatureSearch(sidecarURL string, dedup *dedup.Deduplicator) *TikTokSignatureSearch {
+func NewTikTokSignatureSearch(sidecarURL string, ttwid string, dedup *dedup.Deduplicator) *TikTokSignatureSearch {
 	return &TikTokSignatureSearch{
 		dedup:  dedup,
 		signer: pkgtiktok.NewSignerClient(sidecarURL),
+		ttwid:  ttwid,
 	}
 }
 
@@ -121,19 +124,56 @@ func (s *TikTokSignatureSearch) Fetch(ctx context.Context, query string) ([]Disc
 
 		apiURL := apiEndpoint + "?" + params.Encode()
 
-		fetchResp, err := s.signer.FetchURL(ctx, apiURL)
+		// Step 2: Get signed URL
+		signResp, err := s.signer.SignURL(ctx, apiURL, "")
 		if err != nil {
-			log.Printf("[Discovery] ⚠️ erro no signer fetch na página %d: %v", page, err)
+			log.Printf("[Discovery] ⚠️ erro no signer SignURL na página %d: %v", page, err)
 			break
 		}
 
-		if fetchResp == nil || len(fetchResp) == 0 {
-			log.Printf("[Discovery] ⚠️ resposta vazia da api do tiktok na página %d", page)
+		if signResp.Status != "ok" {
+			log.Printf("[Discovery] ⚠️ sidecar retornou status inválido: %s", signResp.Status)
+			break
+		}
+
+		// Step 3: Fetch from TikTok with correct headers
+		req, err := http.NewRequestWithContext(ctx, "GET", signResp.Data.SignedURL, nil)
+		if err != nil {
+			log.Printf("[Discovery] ⚠️ erro criando request na página %d: %v", page, err)
+			break
+		}
+		
+		cookieStr := signResp.Data.Cookies
+		if s.ttwid != "" {
+			// Se o usuário forneceu um ttwid, garantir que ele seja usado
+			userCookie := s.ttwid
+			if !strings.HasPrefix(userCookie, "ttwid=") {
+				userCookie = "ttwid=" + userCookie
+			}
+			// Adiciona o cookie do usuário, pode sobrescrever o do sidecar se for mais quente
+			cookieStr = userCookie + "; " + cookieStr
+		}
+
+		req.Header.Set("User-Agent", signResp.Data.Navigator.UserAgent)
+		req.Header.Set("Cookie", cookieStr)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Referer", "https://www.tiktok.com/")
+
+		client := &http.Client{Timeout: 20 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[Discovery] ⚠️ erro no http GET na página %d: %v", page, err)
+			break
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			log.Printf("[Discovery] ⚠️ status code %d na página %d", resp.StatusCode, page)
 			break
 		}
 
 		var parsed searchResponse
-		if err := json.Unmarshal(fetchResp, &parsed); err != nil {
+		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 			log.Printf("[Discovery] ⚠️ erro unmarshal JSON da busca na página %d: %v", page, err)
 			break
 		}

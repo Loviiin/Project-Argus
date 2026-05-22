@@ -15,7 +15,9 @@ type SignerClient struct {
 }
 
 type SignRequest struct {
-	URL string `json:"url"`
+	URL        string `json:"url"`
+	NavigateTo string `json:"navigateTo,omitempty"`
+	Cookies    string `json:"cookies,omitempty"`
 }
 
 type SignResponse struct {
@@ -39,14 +41,14 @@ func NewSignerClient(baseURL string) *SignerClient {
 	return &SignerClient{
 		baseURL: baseURL,
 		client: &http.Client{
-			Timeout: 10 * time.Second, // Timeout maior pois requests no sidecar podem demorar
+			Timeout: 45 * time.Second, // Timeout maior pois requests no sidecar podem demorar
 		},
 	}
 }
 
 // SignURL gets a signed URL and browser fingerprint required to make the request
-func (s *SignerClient) SignURL(ctx context.Context, rawURL string) (*SignResponse, error) {
-	reqBody := SignRequest{URL: rawURL}
+func (s *SignerClient) SignURL(ctx context.Context, rawURL string, navigateTo string) (*SignResponse, error) {
+	reqBody := SignRequest{URL: rawURL, NavigateTo: navigateTo}
 	data, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal sign request: %w", err)
@@ -81,8 +83,8 @@ func (s *SignerClient) SignURL(ctx context.Context, rawURL string) (*SignRespons
 }
 
 // FetchURL uses the sidecar's browser to fetch the URL directly, bypassing bot detection
-func (s *SignerClient) FetchURL(ctx context.Context, rawURL string) ([]byte, error) {
-	reqBody := SignRequest{URL: rawURL}
+func (s *SignerClient) FetchURL(ctx context.Context, rawURL string, cookies string) ([]byte, error) {
+	reqBody := SignRequest{URL: rawURL, Cookies: cookies}
 	data, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal fetch request: %w", err)

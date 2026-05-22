@@ -62,7 +62,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		time.Now().Unix(), job.VideoID, job.Count, job.Cursor)
 
 	// 1. Obter a assinatura via Sidecar
-	signResp, err := p.signer.SignURL(ctx, apiURL)
+	signResp, err := p.signer.SignURL(ctx, apiURL, "")
 	if err != nil {
 		return fmt.Errorf("falha na assinatura (Sidecar): %w", err)
 	}
@@ -80,7 +80,15 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 	req.Header.Set("User-Agent", signResp.Data.Navigator.UserAgent)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Referer", "https://www.tiktok.com/")
-	req.Header.Set("Cookie", signResp.Data.Cookies)
+	cookieStr := signResp.Data.Cookies
+	if p.Config.TikTok.Ttwid != "" {
+		userCookie := p.Config.TikTok.Ttwid
+		if !strings.HasPrefix(userCookie, "ttwid=") {
+			userCookie = "ttwid=" + userCookie
+		}
+		cookieStr = userCookie + "; " + cookieStr
+	}
+	req.Header.Set("Cookie", cookieStr)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -94,7 +102,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden || len(bodyBytes) == 0 {
 		log.Printf("[Worker] 🚨 Rate limit ou Shadowban (Status: %d). Tentando fallback /fetch...", resp.StatusCode)
 		
-		fallbackBytes, fetchErr := p.signer.FetchURL(ctx, apiURL)
+		fallbackBytes, fetchErr := p.signer.FetchURL(ctx, apiURL, p.Config.TikTok.Ttwid)
 		if fetchErr != nil {
 			return fmt.Errorf("HTTP %d e falha no fallback /fetch: %w", resp.StatusCode, fetchErr)
 		}
