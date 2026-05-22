@@ -182,13 +182,22 @@ func main() {
 				loc, _ := time.LoadLocation("America/Sao_Paulo")
 				nowSP := time.Now().In(loc)
 
-				err = indexer.IndexData(map[string]interface{}{
+				meiliPayload := map[string]interface{}{
 					"invite_code":         inviteCode,
 					"invite_link":         "https://discord.gg/" + inviteCode,
 					"source_url":          payload.SourcePath,
 					"timestamp_formatted": nowSP.Format("02/01/2006 15:04:05"),
 					"status":              "pending",
-				})
+					"is_reply":            payload.IsReply,
+				}
+				if payload.ParentCommentID != "" {
+					meiliPayload["parent_comment_id"] = payload.ParentCommentID
+				}
+				if payload.IsReply {
+					meiliPayload["tags"] = []string{"[Evasion_Tactic]"}
+				}
+
+				err = indexer.IndexData(meiliPayload)
 				if err != nil {
 					fmt.Printf("[Fast Ingestion] Falha na indexação bruta: %v\n", err)
 					delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second

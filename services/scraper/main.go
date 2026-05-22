@@ -39,14 +39,18 @@ func main() {
 	}
 	defer nc.Close()
 
-	// Garante que o stream SCRAPE exista
-	_, err = js.AddStream(&nats.StreamConfig{
+	streamCfg := &nats.StreamConfig{
 		Name:     "SCRAPE",
-		Subjects: []string{"jobs.scrape"},
+		Subjects: []string{"jobs.scrape", "jobs.scrape.>"},
 		Storage:  nats.FileStorage,
-	})
+	}
+	_, err = js.AddStream(streamCfg)
+	if err != nil && err == nats.ErrStreamNameAlreadyInUse {
+		// Se já existe, apenas atualizamos para adicionar os novos subjects
+		_, err = js.UpdateStream(streamCfg)
+	}
 	if err != nil {
-		log.Printf("Stream SCRAPE: %v (ok se já existe)", err)
+		log.Printf("Aviso ao configurar Stream SCRAPE: %v", err)
 	}
 
 	// --- Redis ---
@@ -80,14 +84,33 @@ func main() {
 		workerIDStr = "1"
 	}
 
+	workerType := os.Getenv("WORKER_TYPE")
+	if workerType == "" {
+		workerType = "top_level"
+	}
+
+	subject := "jobs.scrape"
+	group := "scraper-worker-group"
+	numWorkers := cfg.Scraper.Workers
+
+	if workerType == "reply" {
+		subject = "jobs.scrape.reply"
+		group = "scraper-reply-group"
+		numWorkers = cfg.Scraper.ReplyWorkers
+	}
+
+	if numWorkers <= 0 {
+		numWorkers = 1
+	}
+
 	// --- Subscriber ---
-	sub, err := js.PullSubscribe("jobs.scrape", "scraper-worker-group", nats.AckWait(10*time.Minute))
+	sub, err := js.PullSubscribe(subject, group, nats.AckWait(10*time.Minute))
 	if err != nil {
 		log.Fatal("Erro ao criar pull subscriber:", err)
 	}
 	defer sub.Unsubscribe()
 
-	log.Printf("Scraper Worker %s rodando! Consumindo jobs.scrape...", workerIDStr)
+	log.Printf("Scraper Worker [%s] %s rodando! Consumindo %s... Max workers concorrentes: %d", workerType, workerIDStr, subject, numWorkers)
 
 	// Aguarda sinal de parada
 	ctx, cancel := context.WithCancel(context.Background())
@@ -97,14 +120,10 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
-		fmt.Println("\nSinal recebido. Encerrando Scraper Worker (Aguardando rotinas atuais)...")
+		fmt.Printf("\nSinal recebido. Encerrando Scraper Worker [%s] (Aguardando rotinas atuais)...\n", workerType)
 		cancel()
 	}()
 
-	numWorkers := cfg.Scraper.Workers
-	if numWorkers <= 0 {
-		numWorkers = 1
-	}
 	sem := make(chan struct{}, numWorkers) // Max goroutines para chamadas de API
 	var wg sync.WaitGroup
 
@@ -152,10 +171,15 @@ loop:
 			log.Printf("[Worker %s] 📥 Recebido job: %s (Cursor: %d) [Tentativa: %d]", workerIDStr, job.VideoID, job.Cursor, meta.NumDelivered)
 
 			// 1. Worker Heartbeat/Processing Lock
-			lockKey := fmt.Sprintf("argus:processing_lock:%s:%d", job.VideoID, job.Cursor)
+			lockSuffix := fmt.Sprintf("%s:%d", job.VideoID, job.Cursor)
+			if job.CommentID != "" {
+				lockSuffix = fmt.Sprintf("%s:%s:%d", job.VideoID, job.CommentID, job.Cursor)
+			}
+			lockKey := fmt.Sprintf("argus:processing_lock:%s", lockSuffix)
+
 			if locked, _ := dedupSv.RDB().SetNX(ctx, lockKey, "1", 10*time.Minute).Result(); !locked {
 				delay := time.Duration(30+rand.Intn(30)) * time.Second
-				log.Printf("[Worker %s] Job %s (Cursor: %d) bloqueado por lock. Nak + Jitter: %v", workerIDStr, job.VideoID, job.Cursor, delay)
+				log.Printf("[Worker %s] Job %s bloqueado por lock. Nak + Jitter: %v", workerIDStr, lockSuffix, delay)
 				m.NakWithDelay(delay)
 				return
 			}

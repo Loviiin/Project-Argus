@@ -4,8 +4,10 @@ type OcrMessage struct {
 	SourcePath  string                 `json:"source_path"`
 	TextContent string                 `json:"text_content"`
 	AuthorID    string                 `json:"author_id,omitempty"`
-	SourceType  string                 `json:"source_type,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	SourceType      string                 `json:"source_type,omitempty"`
+	IsReply         bool                   `json:"is_reply,omitempty"`
+	ParentCommentID string                 `json:"parent_comment_id,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // DiscordEnrichJob é o payload para o tópico jobs.enrich.discord

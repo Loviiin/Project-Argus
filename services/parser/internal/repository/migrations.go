@@ -55,6 +55,10 @@ func (r *ArtifactRepository) runMigrations() error {
 				updated_at TIMESTAMP DEFAULT NOW()
 			);`,
 		},
+		{
+			name:  "006_add_reply_id_to_comments",
+			query: "ALTER TABLE comments ADD COLUMN IF NOT EXISTS reply_id VARCHAR(100);",
+		},
 	}
 
 	for _, m := range queries {

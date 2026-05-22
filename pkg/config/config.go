@@ -32,7 +32,8 @@ type Config struct {
 	} `yaml:"nats"`
 
 	Scraper struct {
-		Workers int `yaml:"workers"`
+		Workers      int `yaml:"workers"`
+		ReplyWorkers int `yaml:"reply_workers"`
 	} `yaml:"scraper"`
 
 	Redis struct {

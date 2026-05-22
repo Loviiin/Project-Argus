@@ -92,6 +92,23 @@ services:
       dockerfile: ./services/scraper/Dockerfile
     container_name: argus-scraper
     restart: unless-stopped
+    environment:
+      - WORKER_TYPE=top_level
+    volumes:
+      - ./config:/workspaces/Project-Argus/config
+    depends_on:
+      - nats
+      - argus-db
+      - tiktok-signer
+
+  argus-scraper-reply:
+    build:
+      context: .
+      dockerfile: ./services/scraper/Dockerfile
+    container_name: argus-scraper-reply
+    restart: unless-stopped
+    environment:
+      - WORKER_TYPE=reply
     volumes:
       - ./config:/workspaces/Project-Argus/config
     depends_on:
