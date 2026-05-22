@@ -1,104 +1,75 @@
 # Project Argus
 
-**🔒 PRIVATE REPOSITORY - Full Source Code**
+**OSINT Pipeline: Descobrindo Servidores Discord via TikTok**
 
-OSINT pipeline with advanced TikTok scraping and captcha solving capabilities.
-
-## ⚠️ Important: Open Core Strategy
-
-This repository contains the **complete premium version** with:
-
-- Advanced humanized mouse movement (Bézier curves, overshoot, tremor)
-- TLS fingerprinting and anti-detection
-- Gaussian delay distributions
-- 80-85% captcha success rate
-
-**For open source version**: See `OPEN_CORE_STRATEGY.md` for how to extract the basic version.
+O Project-Argus é um sistema de OSINT (Open Source Intelligence) contínuo e escalável projetado para varrer o TikTok em busca de convites e servidores do Discord, validando, enriquecendo e indexando esses dados para análise avançada.
 
 ---
 
-## Services
+## 🏗️ Arquitetura
 
-- **Discovery** (Go): TikTok scraper with advanced captcha solving
-- **Vision** (Python): OpenCV-based captcha detection (can be open sourced)
-- **Parser** (Go): Discord invite extraction and metadata persistence
-- **Infrastructure**: NATS, Redis, PostgreSQL, Meilisearch
+O Argus foi redesenhado do zero para ser uma **Arquitetura Distribuída**, dividida em microsserviços autônomos que se comunicam através de filas rápidas.
 
----
+### Serviços Principais (Go)
+1. **Discovery**: Monitora hashtags específicas (ex: `#discordserver`) utilizando paginação orgânica. Assim que encontra vídeos interessantes, joga na fila.
+2. **Scraper**: Pega os vídeos da fila, extrai todos os comentários e armazena os dados brutos no PostgreSQL.
+3. **Parser**: Consome os comentários brutos, aplica RegEx pesados e NLP para descobrir links de `discord.gg`. Ao encontrar, chama a API do Discord, pega os dados do servidor (Membros, Nome, Foto) e indexa tudo.
 
-## Quick Start
+### Infraestrutura & Cache
+- **NATS Jetstream**: Fila de mensagens ultrarrápida que conecta os 3 serviços.
+- **Redis**: Controla bloqueios de concorrência (`processing_lock`) e dedup (eliminação de links/vídeos duplicados).
+- **PostgreSQL**: Banco de dados relacional para armazenamento de longo prazo (comentários brutos, metadata).
+- **Meilisearch**: Motor de busca e Painel Visual para varrer e filtrar os convites descobertos.
 
-### 1. Configure
-
-```bash
-cp config/config.example.yaml config/config.yaml
-# Edit config.yaml with your settings
-```
-
-**Premium Features** are controlled via `config.yaml`:
-
-- Set `captcha.humanized_movement.enabled: true` for advanced movement
-- Set `captcha.delays.type: "gaussian"` for anti-detection timing
-
-### 2. Setup & Start Infrastructure
-
-```bash
-make setup  # Install all dependencies
-make up     # Start Docker services (NATS, Redis, PostgreSQL, Meilisearch)
-```
-
-### 3. Run Services
-
-```bash
-# Terminal 1: Captcha Solver (OpenCV)
-make run-captcha-solver
-
-# Terminal 2: Discovery (TikTok Scraper)
-make run-discovery
-
-# Terminal 3: Parser (optional - for Discord extraction)
-make run-parser
-```
-
-### 4. Test Captcha System
-
-```bash
-make test-captcha  # Automated test with Vision + Discovery
-```
+### O "Cheat-Code": Sidecar
+Para burlar os rigorosos *Shadowbans*, *Captchas* e o temido "Response 0-byte" da API do TikTok, o Argus usa um **Sidecar** (Node.js/Puppeteer).
+O Sidecar é acionado via API interna para gerar assinaturas complexas (`X-Bogus`, `X-Gnarly`) nativamente. Caso uma requisição direta falhe, os workers pedem para o Sidecar injetar o *Cookie* (ttwid) e utilizar a rota de `/fetch` do navegador headless como fallback garantido.
 
 ---
 
-make test-scraper-browser # E2E: Tests Scraper browser automation (Playwright)
-make test-vision-job # Unit/Integration: Tests Vision job processing mock
-make send-payload # Manual: Sends a fake payload from Vision -> Parser
+## 🚀 Como Rodar (Plug & Play)
 
-````
+Todo o ecossistema foi dockerizado (Bancos, Filas, Sidecar e Workers Go). O setup é extremamente simples e não requer nada além do **Docker Desktop** instalado.
 
-### 5. Verification
-
-Check if data was inserted into Postgres:
-
+### 1. Clonar e Configurar
 ```bash
-docker exec -i banco-argus-dev psql -U argus-user -d argus-post-db -c "SELECT source_url, discord_invite_code, LEFT(raw_ocr_text, 50) as preview FROM artifacts ORDER BY processed_at DESC LIMIT 5;"
-````
+git clone https://github.com/Loviiin/Project-Argus.git
+cd Project-Argus
+```
 
-## Available Make Commands
+### 2. Rodar!
+Nós criamos scripts amigáveis que checam dependências, preparam seus arquivos de configuração e sobem todo o cluster.
 
-- `make up`: Start infrastructure
-- `make down`: Stop infrastructure
-- `make logs`: Detailed logs of infra
-- `make setup`: Install all dependencies
-- `make run-parser`: Run Parser service
-- `make run-scraper`: Run Scraper service
-- `make run-vision`: Run Vision service
-- `make test-full`: Run integration full flow test
-- `make test-scraper-browser`: Run scraper browser test
-- `make test-vision-job`: Run vision job test
-- `make send-payload`: Send manual test payload
-- `make help`: List all commands
+#### No Windows (PowerShell):
+```powershell
+.\start.ps1
+```
 
-## Troubleshooting
+#### No Linux / Ubuntu Server:
+```bash
+chmod +x start.sh
+./start.sh
+```
 
-- If Parser fails to connect to Postgres with a Unix socket error, ensure the DB URL uses `127.0.0.1` and not `localhost`.
-- Ensure containers are running: `docker compose ps`
-- If running in open-core mode, set credentials via env vars (e.g. `DATABASE_URL`) instead of committing them in `config.yaml`.
+O script perguntará pelo seu `ttwid` (Cookie do TikTok) na primeira vez, ajustará os IPs para a rede interna do Docker e fará o build de tudo.
+
+---
+
+## 📊 Acesso e Painéis
+
+Quando os scripts avisarem que tudo subiu, a infraestrutura local estará viva.
+
+- **Painel de Busca (Meilisearch):** `http://localhost:7700`
+- **PostgreSQL:** `localhost:5432` (Usuário: `argus-user`, Senha: `change_me`, Banco: `argus-post-db`)
+- **Redis:** `localhost:6379`
+- **Logs ao vivo:**
+  ```bash
+  docker compose logs -f argus-discovery argus-scraper argus-parser
+  ```
+
+---
+
+## 💻 Cluster Multi-Node (Avançado)
+Como os workers conversam através do **NATS** e **Redis**, você pode instalar o Argus em vários PCs ou Servidores VPS ao mesmo tempo. 
+
+Basta usar a sua máquina principal como **Control Plane** (Rodando o Banco de dados e NATS) e configurar o `config.yaml` dos outros PCs para apontar para o IP local/remoto da sua máquina principal. Assim, múltiplos *Scrapers* estarão varrendo o TikTok simultaneamente e enchendo o mesmo banco de dados.
