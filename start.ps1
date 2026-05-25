@@ -41,8 +41,9 @@ docker compose up -d --build
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`nSucesso! Todos os servicos estao rodando." -ForegroundColor Green
-    Write-Host "Para visualizar os servidores, acesse o Meilisearch em: http://localhost:7700" -ForegroundColor Cyan
-    Write-Host "Para ver os logs dos trabalhadores: docker compose logs -f argus-discovery argus-scraper argus-parser" -ForegroundColor Gray
+    Write-Host "Meilisearch: http://localhost:7700" -ForegroundColor Cyan
+    Write-Host "NATS Monitor: http://localhost:8222" -ForegroundColor Cyan
+    Write-Host "Para ver os logs: docker compose logs -f argus-discovery argus-scraper argus-parser" -ForegroundColor Gray
 } else {
     Write-Host "`nHouve um erro ao tentar subir os containers." -ForegroundColor Red
 }

@@ -37,5 +37,6 @@ echo -e "\n🚀 Compilando as imagens Go e subindo toda a infraestrutura em back
 docker compose up -d --build
 
 echo -e "\n✅ Sucesso! Todos os servicos estao rodando."
-echo "Para visualizar os servidores pelo PC do Ryzen, acesse o IP deste Pentium na porta 7700 (Ex: http://192.168.x.x:7700)"
+echo "   Meilisearch: http://localhost:7700"
+echo "   NATS Monitor: http://localhost:8222"
 echo "Para ver os logs: docker compose logs -f argus-discovery argus-scraper argus-parser"

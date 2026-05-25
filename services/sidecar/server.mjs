@@ -204,7 +204,7 @@ async function initBrowser() {
       return undefined; // Let Puppeteer find it
     };
 
-    // Build browser args
+    // Build browser args — optimized for low memory (Pentium G4560 + 8GB RAM)
     const browserArgs = [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -212,6 +212,22 @@ async function initBrowser() {
       "--disable-blink-features=AutomationControlled",
       "--disable-gpu",
       "--window-size=1920,1080",
+      // Memory optimization flags
+      "--single-process",
+      "--renderer-process-limit=1",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-default-apps",
+      "--disable-sync",
+      "--disable-translate",
+      "--metrics-recording-only",
+      "--no-first-run",
+      "--safebrowsing-disable-auto-update",
+      "--disable-component-update",
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-backgrounding-occluded-windows",
+      "--js-flags=--max-old-space-size=64",
     ];
 
     // Add proxy if enabled

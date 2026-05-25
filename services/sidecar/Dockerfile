@@ -30,7 +30,8 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies (production only)
-RUN npm ci --only=production
+ENV NODE_ENV=production
+RUN npm ci
 
 # Copy application files
 COPY server.mjs ./
@@ -42,6 +43,9 @@ COPY javascript/ ./javascript/
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PORT=8080
+
+# Limit Node.js heap to 128MB (Chromium runs out-of-process)
+ENV NODE_OPTIONS="--max-old-space-size=128"
 
 EXPOSE 8080
 

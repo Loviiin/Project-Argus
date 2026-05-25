@@ -1,13 +1,23 @@
 services:
   nats:
-    image: nats:latest
+    image: nats:alpine
     container_name: nats-jetstream
-    command: -js
+    command: -js -m 8222
     ports:
       - "4222:4222"
       - "8222:8222"
     volumes:
       - nats_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   argus-db:
     image: postgres:18.1-alpine3.23
@@ -17,6 +27,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
       POSTGRES_DB: ${POSTGRES_DB:-argus-post-db}
       TZ: America/Sao_Paulo
+    command: postgres -c shared_buffers=128MB -c work_mem=4MB -c maintenance_work_mem=64MB -c effective_cache_size=256MB
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -30,17 +41,26 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 768M
 
   argus-cache:
     image: redis:8.4.0-alpine
     container_name: argus-cache
     restart: always
-    command: redis-server --save 60 1 --loglevel warning
+    command: redis-server --save 60 1 --loglevel warning --maxmemory 64mb --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   argus-meili:
     image: getmeili/meilisearch:v1.33.1
@@ -53,10 +73,15 @@ services:
       - MEILI_MASTER_KEY=masterKey123
       - MEILI_ENV=development
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 768M
 
   tiktok-signer:
     build: ./services/sidecar
@@ -71,7 +96,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1.5G
+          memory: 1G
 
   argus-discovery:
     build:
@@ -82,9 +107,16 @@ services:
     volumes:
       - ./config:/workspaces/Project-Argus/config
     depends_on:
-      - nats
-      - argus-cache
-      - tiktok-signer
+      nats:
+        condition: service_healthy
+      argus-cache:
+        condition: service_healthy
+      tiktok-signer:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   argus-scraper:
     build:
@@ -97,9 +129,16 @@ services:
     volumes:
       - ./config:/workspaces/Project-Argus/config
     depends_on:
-      - nats
-      - argus-db
-      - tiktok-signer
+      nats:
+        condition: service_healthy
+      argus-db:
+        condition: service_healthy
+      tiktok-signer:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   argus-scraper-reply:
     build:
@@ -112,9 +151,16 @@ services:
     volumes:
       - ./config:/workspaces/Project-Argus/config
     depends_on:
-      - nats
-      - argus-db
-      - tiktok-signer
+      nats:
+        condition: service_healthy
+      argus-db:
+        condition: service_healthy
+      tiktok-signer:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   argus-parser:
     build:
@@ -125,10 +171,18 @@ services:
     volumes:
       - ./config:/workspaces/Project-Argus/config
     depends_on:
-      - nats
-      - argus-db
-      - argus-cache
-      - argus-meili
+      nats:
+        condition: service_healthy
+      argus-db:
+        condition: service_healthy
+      argus-cache:
+        condition: service_healthy
+      argus-meili:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
 volumes:
   postgres_data:
