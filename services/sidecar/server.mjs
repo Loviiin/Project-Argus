@@ -212,8 +212,7 @@ async function initBrowser() {
       "--disable-blink-features=AutomationControlled",
       "--disable-gpu",
       "--window-size=1920,1080",
-      // Memory optimization flags
-      "--single-process",
+      // Memory optimization flags (safe ones)
       "--renderer-process-limit=1",
       "--disable-extensions",
       "--disable-background-networking",
@@ -227,7 +226,6 @@ async function initBrowser() {
       "--disable-background-timer-throttling",
       "--disable-renderer-backgrounding",
       "--disable-backgrounding-occluded-windows",
-      "--js-flags=--max-old-space-size=64",
     ];
 
     // Add proxy if enabled
