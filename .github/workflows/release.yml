@@ -1,9 +1,9 @@
-name: Publish Lite Architecture Images (Multi-Arch)
+name: Publish Argus Images (Multi-Arch)
 
 on:
   push:
     tags:
-      - 'v*.*.*-lite'
+      - 'v*.*.*'
 
 jobs:
   build-and-push:
@@ -37,7 +37,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/${{ matrix.service }}-lite
+          images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -82,7 +82,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/sidecar-lite
+          images: ghcr.io/${{ github.repository }}/sidecar
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
