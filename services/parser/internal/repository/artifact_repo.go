@@ -20,11 +20,17 @@ type Artifact struct {
 	DiscordStatus      string
 }
 
-type ArtifactRepository struct {
+type Repository interface {
+	Save(ctx context.Context, a Artifact) (string, error)
+	UpdateEnrichedData(ctx context.Context, inviteCode, serverName, serverID, icon string, memberCount int, status string) error
+	Close(ctx context.Context)
+}
+
+type PostgresRepository struct {
 	db *pgxpool.Pool
 }
 
-func NewArtifactRepository(databaseURL string) (*ArtifactRepository, error) {
+func NewPostgresRepository(databaseURL string) (*PostgresRepository, error) {
 	conn, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao conectar no postgres: %w", err)
@@ -34,7 +40,7 @@ func NewArtifactRepository(databaseURL string) (*ArtifactRepository, error) {
 		return nil, fmt.Errorf("banco não responde: %w", err)
 	}
 
-	repo := &ArtifactRepository{db: conn}
+	repo := &PostgresRepository{db: conn}
 
 	if err := repo.runMigrations(); err != nil {
 		conn.Close()
@@ -44,7 +50,7 @@ func NewArtifactRepository(databaseURL string) (*ArtifactRepository, error) {
 	return repo, nil
 }
 
-func (r *ArtifactRepository) Save(ctx context.Context, a Artifact) (string, error) {
+func (r *PostgresRepository) Save(ctx context.Context, a Artifact) (string, error) {
 	query := `
         INSERT INTO artifacts 
         (source_url, author_id, discord_invite_code, discord_server_name, discord_server_id, discord_member_count, raw_ocr_text, risk_score, processed_at,discord_icon, discord_status)
@@ -76,7 +82,7 @@ func (r *ArtifactRepository) Save(ctx context.Context, a Artifact) (string, erro
 
 // UpdateEnrichedData atualiza SOMENTE os dados enriquecidos do Discord,
 // sem tocar nos campos que já existem (source_url, raw_ocr_text, etc).
-func (r *ArtifactRepository) UpdateEnrichedData(ctx context.Context, inviteCode, serverName, serverID, icon string, memberCount int, status string) error {
+func (r *PostgresRepository) UpdateEnrichedData(ctx context.Context, inviteCode, serverName, serverID, icon string, memberCount int, status string) error {
 	query := `
 		UPDATE artifacts 
 		SET discord_server_name = $2,
@@ -90,6 +96,6 @@ func (r *ArtifactRepository) UpdateEnrichedData(ctx context.Context, inviteCode,
 	return err
 }
 
-func (r *ArtifactRepository) Close(ctx context.Context) {
+func (r *PostgresRepository) Close(ctx context.Context) {
 	r.db.Close()
 }

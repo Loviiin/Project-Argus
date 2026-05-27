@@ -44,7 +44,9 @@ type Config struct {
 	} `yaml:"redis"`
 
 	Database struct {
-		URL string `yaml:"url"`
+		Type       string `yaml:"type"` // "postgres" ou "sqlite"
+		URL        string `yaml:"url"`
+		SQLitePath string `yaml:"sqlite_path"` // ex: "./data/argus.db"
 	} `yaml:"database"`
 
 	Meilisearch struct {

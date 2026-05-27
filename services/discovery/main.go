@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,6 +24,12 @@ func main() {
 	cfg := config.LoadConfig()
 
 	fmt.Println("Argus Discovery Service (Publisher) iniciando...")
+
+	// Inicia Pprof em background
+	go func() {
+		log.Println("Iniciando Pprof do Discovery na porta :6060")
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+	}()
 
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {

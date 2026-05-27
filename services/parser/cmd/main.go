@@ -9,6 +9,8 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -31,13 +33,32 @@ import (
 func main() {
 	cfg := config.LoadConfig()
 
-	repo, err := repository.NewArtifactRepository(cfg.Database.URL)
-	if err != nil {
-		log.Fatal("Erro fatal no banco:", err)
+	// Inicia Pprof em background
+	go func() {
+		log.Println("Iniciando Pprof do Parser na porta :6060")
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+	}()
+
+	var repo repository.Repository
+	var err error
+	var indexer search.SearchIndexer
+
+	if cfg.Database.Type == "sqlite" {
+		sqliteRepo, errDB := repository.NewSQLiteRepository(cfg.Database.SQLitePath)
+		if errDB != nil {
+			log.Fatal("Erro fatal no SQLite:", errDB)
+		}
+		repo = sqliteRepo
+		indexer = search.NewSQLiteFTS5Indexer(sqliteRepo.DB())
+	} else {
+		pgRepo, errDB := repository.NewPostgresRepository(cfg.Database.URL)
+		if errDB != nil {
+			log.Fatal("Erro fatal no Postgres:", errDB)
+		}
+		repo = pgRepo
+		indexer = search.NewIndexer(cfg.Meilisearch.Host, cfg.Meilisearch.Key, cfg.Meilisearch.Index)
 	}
 	defer repo.Close(context.Background())
-
-	indexer := search.NewIndexer(cfg.Meilisearch.Host, cfg.Meilisearch.Key, cfg.Meilisearch.Index)
 
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {

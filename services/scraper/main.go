@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"scraper/internal/worker"
 
 	_ "github.com/lib/pq"
+	_ "modernc.org/sqlite"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
 	"github.com/loviiin/project-argus/pkg/tiktok"
@@ -27,6 +30,12 @@ func main() {
 	cfg := config.LoadConfig()
 
 	fmt.Println("Argus Scraper Worker (Subscriber) iniciando (Arquitetura Sidecar)...")
+
+	// Inicia Pprof em background
+	go func() {
+		log.Println("Iniciando Pprof do Scraper na porta :6060")
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+	}()
 
 	// --- NATS ---
 	nc, err := nats.Connect(cfg.Nats.URL)
@@ -62,13 +71,29 @@ func main() {
 	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
 	defer dedupSv.Close()
 
-	// --- PostgreSQL ---
-	db, err := sql.Open("postgres", cfg.Database.URL)
-	if err != nil {
-		log.Fatal("Erro conexão PostgreSQL:", err)
+	// --- Database ---
+	var db *sql.DB
+	var dbErr error
+	if cfg.Database.Type == "sqlite" {
+		db, dbErr = sql.Open("sqlite", cfg.Database.SQLitePath)
+	} else {
+		db, dbErr = sql.Open("postgres", cfg.Database.URL)
+	}
+	if dbErr != nil {
+		log.Fatal("Erro conexão Banco:", dbErr)
+	}
+
+	if cfg.Database.Type == "sqlite" {
+		if _, err := db.Exec(`
+			PRAGMA journal_mode=WAL;
+			PRAGMA synchronous=NORMAL;
+			PRAGMA busy_timeout=10000;
+		`); err != nil {
+			log.Printf("Aviso: falha ao configurar PRAGMA SQLite no scraper: %v", err)
+		}
 	}
 	if err = db.Ping(); err != nil {
-		log.Fatal("Erro ping PostgreSQL:", err)
+		log.Fatal("Erro ping Banco:", err)
 	}
 	defer db.Close()
 

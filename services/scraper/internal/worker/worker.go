@@ -147,14 +147,16 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 	// 7. Inserção no PostgreSQL com UPSERT
 	insertedCount := 0
 	for _, c := range tiktokResp.Comments {
-		// UPSERT no PostgreSQL
+		createdAt := time.Unix(c.CreateTime, 0)
+		now := time.Now()
+
 		query := `
 			INSERT INTO comments (cid, aweme_id, reply_id, text, digg_count, reply_comment_total, uid, nickname, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9), NOW())
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			ON CONFLICT (cid) DO UPDATE SET
 				digg_count = EXCLUDED.digg_count,
 				reply_comment_total = EXCLUDED.reply_comment_total,
-				updated_at = NOW()
+				updated_at = $10
 		`
 		var replyID sql.NullString
 		if job.CommentID != "" {
@@ -162,7 +164,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		}
 
 		_, err := p.db.ExecContext(ctx, query,
-			c.Cid, job.VideoID, replyID, c.Text, c.DiggCount, c.ReplyCommentTotal, c.User.Uid, c.User.Nickname, c.CreateTime)
+			c.Cid, job.VideoID, replyID, c.Text, c.DiggCount, c.ReplyCommentTotal, c.User.Uid, c.User.Nickname, createdAt, now)
 		if err != nil {
 			log.Printf("[Worker] ⚠️ Erro ao inserir comentário %s: %v", c.Cid, err)
 		} else {
