@@ -87,7 +87,7 @@ services:
     build: ./services/sidecar
     container_name: tiktok-signer
     ports:
-      - "8080:8080"
+      - "8082:8080"
     restart: unless-stopped
     environment:
       - TZ=America/Sao_Paulo

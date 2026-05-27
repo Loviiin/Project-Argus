@@ -5,13 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/imroc/req/v3"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/tiktok"
 	"github.com/nats-io/nats.go"
@@ -74,19 +74,6 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		return fmt.Errorf("falha na assinatura (Sidecar): %w", err)
 	}
 
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	// 2. Executar a requisição GET
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signResp.Data.SignedURL, nil)
-	if err != nil {
-		return fmt.Errorf("erro ao criar requisição HTTP: %w", err)
-	}
-
-	req.Header.Set("User-Agent", signResp.Data.Navigator.UserAgent)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Referer", "https://www.tiktok.com/")
 	cookieStr := signResp.Data.Cookies
 	if p.Config.TikTok.Ttwid != "" {
 		userCookie := p.Config.TikTok.Ttwid
@@ -95,15 +82,23 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		}
 		cookieStr = userCookie + "; " + cookieStr
 	}
-	req.Header.Set("Cookie", cookieStr)
 
-	resp, err := client.Do(req)
+	client := req.C().ImpersonateChrome().SetTimeout(10 * time.Second)
+
+	// 2. Executar a requisição GET
+	resp, err := client.R().
+		SetContext(ctx).
+		SetHeader("User-Agent", signResp.Data.Navigator.UserAgent).
+		SetHeader("Accept", "application/json").
+		SetHeader("Referer", "https://www.tiktok.com/").
+		SetHeader("Cookie", cookieStr).
+		Get(signResp.Data.SignedURL)
+
 	if err != nil {
 		return fmt.Errorf("falha na requisição direta: %w", err)
 	}
-	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyBytes := resp.Bytes()
 
 	// Tratamento de Rate Limit ou Shadowban com Fallback
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden || len(bodyBytes) == 0 {

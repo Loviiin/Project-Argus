@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/imroc/req/v3"
 	"github.com/loviiin/project-argus/pkg/dedup"
 	pkgtiktok "github.com/loviiin/project-argus/pkg/tiktok"
 )
@@ -137,12 +137,6 @@ func (s *TikTokSignatureSearch) Fetch(ctx context.Context, query string) ([]Disc
 		}
 
 		// Step 3: Fetch from TikTok with correct headers
-		req, err := http.NewRequestWithContext(ctx, "GET", signResp.Data.SignedURL, nil)
-		if err != nil {
-			log.Printf("[Discovery] ⚠️ erro criando request na página %d: %v", page, err)
-			break
-		}
-		
 		cookieStr := signResp.Data.Cookies
 		if s.ttwid != "" {
 			// Se o usuário forneceu um ttwid, garantir que ele seja usado
@@ -154,26 +148,38 @@ func (s *TikTokSignatureSearch) Fetch(ctx context.Context, query string) ([]Disc
 			cookieStr = userCookie + "; " + cookieStr
 		}
 
-		req.Header.Set("User-Agent", signResp.Data.Navigator.UserAgent)
-		req.Header.Set("Cookie", cookieStr)
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Referer", "https://www.tiktok.com/")
+		client := req.C().ImpersonateChrome().SetTimeout(20 * time.Second)
+		resp, err := client.R().
+			SetContext(ctx).
+			SetHeader("User-Agent", signResp.Data.Navigator.UserAgent).
+			SetHeader("Cookie", cookieStr).
+			SetHeader("Accept", "application/json").
+			SetHeader("Referer", "https://www.tiktok.com/").
+			Get(signResp.Data.SignedURL)
 
-		client := &http.Client{Timeout: 20 * time.Second}
-		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[Discovery] ⚠️ erro no http GET na página %d: %v", page, err)
 			break
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != 200 {
 			log.Printf("[Discovery] ⚠️ status code %d na página %d", resp.StatusCode, page)
 			break
 		}
 
+		bodyBytes := resp.Bytes()
+		if len(bodyBytes) == 0 {
+			log.Printf("[Discovery] 🚨 Resposta vazia detectada. Tentando fallback /fetch pelo Sidecar na página %d...", page)
+			fallbackBytes, fetchErr := s.signer.FetchURL(ctx, apiURL, s.ttwid)
+			if fetchErr != nil {
+				log.Printf("[Discovery] ⚠️ falha no fallback /fetch na página %d: %v", page, fetchErr)
+				break
+			}
+			bodyBytes = fallbackBytes
+		}
+
 		var parsed searchResponse
-		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
 			log.Printf("[Discovery] ⚠️ erro unmarshal JSON da busca na página %d: %v", page, err)
 			break
 		}

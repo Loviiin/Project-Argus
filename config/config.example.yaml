@@ -20,6 +20,12 @@ discovery:
     - "discord"
     - "gamingcommunity"
     - "discordinvite"
+    - "panelinha discord"
+    - "paneleira"
+    - "panela"
+    - "servidores discord"
+    - "soudopapai"
+    - "madeindiscord"
   interval_seconds: 1000
   workers: 1
 
