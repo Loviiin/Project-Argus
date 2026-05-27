@@ -5,7 +5,7 @@ import (
 	"log"
 )
 
-func (r *ArtifactRepository) runMigrations() error {
+func (r *PostgresRepository) runMigrations() error {
 	log.Println("Verificando schema do banco de dados...")
 
 	queries := []struct {

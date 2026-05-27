@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  sidecar:
+    build:
+      context: ./services/sidecar
+      dockerfile: Dockerfile.headless
+    ports:
+      - "8085:8080"
+      - "9229:9229"
+    environment:
+      - PORT=8080
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  parser:
+    build:
+      context: .
+      dockerfile: services/parser/Dockerfile
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - GOMEMLIMIT=50MiB
+    volumes:
+      - ./config/config.example.yaml:/app/config.yaml
+      - ./data:/app/data
+    ports:
+      - "6060:6060" # Pprof
+    depends_on:
+      - nats
+      - redis
+
+  discovery:
+    build:
+      context: .
+      dockerfile: services/discovery/Dockerfile
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - SIDECAR_URL=http://sidecar:8080
+      - GOMEMLIMIT=50MiB
+    volumes:
+      - ./config/config.example.yaml:/app/config.yaml
+    ports:
+      - "6061:6060" # Pprof mapeado para host 6061
+      - "8081:8081" # Metrics
+    depends_on:
+      - nats
+      - redis
+      - sidecar
+
+  scraper:
+    build:
+      context: .
+      dockerfile: services/scraper/Dockerfile
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - GOMEMLIMIT=50MiB
+    volumes:
+      - ./config/config.example.yaml:/app/config.yaml
+      - ./data:/app/data
+    ports:
+      - "6062:6060" # Pprof mapeado para host 6062
+    depends_on:
+      - nats
+      - redis
+      - sidecar
+
+  scraper-reply:
+    build:
+      context: .
+      dockerfile: services/scraper/Dockerfile
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - GOMEMLIMIT=50MiB
+      - WORKER_TYPE=reply
+    volumes:
+      - ./config/config.example.yaml:/app/config.yaml
+      - ./data:/app/data
+    ports:
+      - "6063:6060" # Pprof mapeado para host 6063
+    depends_on:
+      - nats
+      - redis
+      - sidecar

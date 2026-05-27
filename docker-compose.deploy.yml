@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    restart: unless-stopped
+
+  sidecar:
+    image: ghcr.io/loviiin/project-argus/sidecar:latest
+    ports:
+      - "8085:8080"
+    environment:
+      - PORT=8080
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    restart: unless-stopped
+
+  parser:
+    image: ghcr.io/loviiin/project-argus/parser:latest
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - GOMEMLIMIT=50MiB
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
+    ports:
+      - "6060:6060" # Pprof
+    depends_on:
+      - nats
+      - redis
+    restart: unless-stopped
+
+  discovery:
+    image: ghcr.io/loviiin/project-argus/discovery:latest
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - SIDECAR_URL=http://sidecar:8080
+      - GOMEMLIMIT=50MiB
+    volumes:
+      - ./config.yaml:/app/config.yaml
+    ports:
+      - "6061:6060" # Pprof
+      - "8081:8081" # Metrics
+    depends_on:
+      - nats
+      - redis
+      - sidecar
+    restart: unless-stopped
+
+  scraper:
+    image: ghcr.io/loviiin/project-argus/scraper:latest
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - GOMEMLIMIT=50MiB
+      - WORKER_TYPE=top_level
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
+    ports:
+      - "6062:6060" # Pprof
+    depends_on:
+      - nats
+      - redis
+      - sidecar
+    restart: unless-stopped
+
+  scraper-reply:
+    image: ghcr.io/loviiin/project-argus/scraper:latest
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - GOMEMLIMIT=50MiB
+      - WORKER_TYPE=reply
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
+    ports:
+      - "6063:6060" # Pprof
+    depends_on:
+      - nats
+      - redis
+      - sidecar
+    restart: unless-stopped
+
+  # Watchtower: Atualiza os containers automaticamente quando houver imagem nova no GitHub!
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 300 # Checa o Github a cada 5 minutos
+    restart: unless-stopped

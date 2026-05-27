@@ -5,13 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/imroc/req/v3"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/tiktok"
 	"github.com/nats-io/nats.go"
@@ -74,19 +74,6 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		return fmt.Errorf("falha na assinatura (Sidecar): %w", err)
 	}
 
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	// 2. Executar a requisição GET
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signResp.Data.SignedURL, nil)
-	if err != nil {
-		return fmt.Errorf("erro ao criar requisição HTTP: %w", err)
-	}
-
-	req.Header.Set("User-Agent", signResp.Data.Navigator.UserAgent)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Referer", "https://www.tiktok.com/")
 	cookieStr := signResp.Data.Cookies
 	if p.Config.TikTok.Ttwid != "" {
 		userCookie := p.Config.TikTok.Ttwid
@@ -95,15 +82,23 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		}
 		cookieStr = userCookie + "; " + cookieStr
 	}
-	req.Header.Set("Cookie", cookieStr)
 
-	resp, err := client.Do(req)
+	client := req.C().ImpersonateChrome().SetTimeout(10 * time.Second)
+
+	// 2. Executar a requisição GET
+	resp, err := client.R().
+		SetContext(ctx).
+		SetHeader("User-Agent", signResp.Data.Navigator.UserAgent).
+		SetHeader("Accept", "application/json").
+		SetHeader("Referer", "https://www.tiktok.com/").
+		SetHeader("Cookie", cookieStr).
+		Get(signResp.Data.SignedURL)
+
 	if err != nil {
 		return fmt.Errorf("falha na requisição direta: %w", err)
 	}
-	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyBytes := resp.Bytes()
 
 	// Tratamento de Rate Limit ou Shadowban com Fallback
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden || len(bodyBytes) == 0 {
@@ -152,14 +147,16 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 	// 7. Inserção no PostgreSQL com UPSERT
 	insertedCount := 0
 	for _, c := range tiktokResp.Comments {
-		// UPSERT no PostgreSQL
+		createdAt := time.Unix(c.CreateTime, 0)
+		now := time.Now()
+
 		query := `
 			INSERT INTO comments (cid, aweme_id, reply_id, text, digg_count, reply_comment_total, uid, nickname, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9), NOW())
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			ON CONFLICT (cid) DO UPDATE SET
 				digg_count = EXCLUDED.digg_count,
 				reply_comment_total = EXCLUDED.reply_comment_total,
-				updated_at = NOW()
+				updated_at = $10
 		`
 		var replyID sql.NullString
 		if job.CommentID != "" {
@@ -167,7 +164,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		}
 
 		_, err := p.db.ExecContext(ctx, query,
-			c.Cid, job.VideoID, replyID, c.Text, c.DiggCount, c.ReplyCommentTotal, c.User.Uid, c.User.Nickname, c.CreateTime)
+			c.Cid, job.VideoID, replyID, c.Text, c.DiggCount, c.ReplyCommentTotal, c.User.Uid, c.User.Nickname, createdAt, now)
 		if err != nil {
 			log.Printf("[Worker] ⚠️ Erro ao inserir comentário %s: %v", c.Cid, err)
 		} else {

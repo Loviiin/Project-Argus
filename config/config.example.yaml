@@ -12,6 +12,8 @@ discord:
   proxy: "" # optional, e.g. "http://user:pass@ip:port"
 
 database:
+  type: "sqlite"
+  sqlite_path: "./data/argus.db"
   url: "postgres://argus-user:change_me@127.0.0.1:5432/argus-post-db?sslmode=disable"
 
 discovery:
@@ -20,15 +22,21 @@ discovery:
     - "discord"
     - "gamingcommunity"
     - "discordinvite"
+    - "panelinha discord"
+    - "paneleira"
+    - "panela"
+    - "servidores discord"
+    - "soudopapai"
+    - "madeindiscord"
   interval_seconds: 1000
   workers: 1
 
 tiktok:
   # Cookie completo do TikTok. Use F12 -> Network -> Copie a string do `Cookie:` das requests search/general/full/
-  ttwid: "ttwid=YOUR_COOKIE_STRING_HERE"
+  ttwid: "1%7CrqmOgwTmVGTtx2_LeAf3mwKnHkVPXPusWim27KOQlTE%7C1779849715%7Cef40cdd8fb8c8c183aa78a22f71d9132d5080878bece937b808874b295d9e3b2"
   
   # URL do sidecar Evil0ctal (Docker local)
-  sidecar_url: "http://localhost:8080"
+  sidecar_url: "http://sidecar:8080"
   
   # Contas TikTok conhecidas para monitorar (Estágio 2)
   target_accounts: []
@@ -39,13 +47,13 @@ meilisearch:
   index: "artifacts"
 
 redis:
-  address: "localhost:6379"
+  address: "redis:6379"
   password: ""
   db: 0
   ttl_hours: 48
 
 nats:
-  url: "nats://localhost:4222"
+  url: "nats://nats:4222"
 
 scraper:
   workers: 2

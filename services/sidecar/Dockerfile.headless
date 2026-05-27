@@ -1,0 +1,19 @@
+FROM node:20-alpine
+
+# Instalar o Chromium nativo do Alpine
+RUN apk update && apk add --no-cache chromium
+
+WORKDIR /usr/src/app
+
+COPY package*.json ./
+# Ignorar dependências opcionais e Chromium downloader via ENV
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+RUN npm install --omit=dev
+
+COPY . .
+
+EXPOSE 8080 9229
+
+CMD ["node", "--inspect=0.0.0.0:9229", "server.mjs"]

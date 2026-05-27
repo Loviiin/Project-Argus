@@ -4,7 +4,7 @@ WORKDIR /workspaces/Project-Argus
 RUN apk add --no-cache git
 
 # Cache: copy all module files first for Go Workspace
-COPY go.work go.work.sum ./
+COPY go.work ./
 COPY pkg/go.mod pkg/go.sum ./pkg/
 COPY services/discovery/go.mod services/discovery/go.sum ./services/discovery/
 COPY services/parser/go.mod services/parser/go.sum ./services/parser/

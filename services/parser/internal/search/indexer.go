@@ -18,14 +18,21 @@ type SearchDoc struct {
 	Status             string `json:"status,omitempty"`
 }
 
-// Indexer é a struct que guarda a conexão aberta
-type Indexer struct {
+// SearchIndexer interface for dependency injection
+type SearchIndexer interface {
+	IndexData(doc map[string]interface{}) error
+	UpdateData(doc map[string]interface{}) error
+	GetDocument(pk string) (*SearchDoc, error)
+}
+
+// MeilisearchIndexer é a struct que guarda a conexão aberta
+type MeilisearchIndexer struct {
 	client    meilisearch.ServiceManager
 	indexName string
 }
 
 // NewIndexer cria a conexão e garante que o índice existe
-func NewIndexer(host, apiKey, indexName string) *Indexer {
+func NewIndexer(host, apiKey, indexName string) *MeilisearchIndexer {
 	client := meilisearch.New(host, meilisearch.WithAPIKey(apiKey))
 
 	_, err := client.CreateIndex(&meilisearch.IndexConfig{
@@ -52,14 +59,14 @@ func NewIndexer(host, apiKey, indexName string) *Indexer {
 
 	fmt.Println("Conectado ao Meilisearch!")
 
-	return &Indexer{
+	return &MeilisearchIndexer{
 		client:    client,
 		indexName: indexName,
 	}
 }
 
 // IndexData recebe o documento pronto e atualiza o index parcialmente
-func (i *Indexer) IndexData(doc map[string]interface{}) error {
+func (i *MeilisearchIndexer) IndexData(doc map[string]interface{}) error {
 	pk := "invite_code"
 	task, err := i.client.Index(i.indexName).UpdateDocuments([]map[string]interface{}{doc}, &meilisearch.DocumentOptions{PrimaryKey: &pk})
 	if err != nil {
@@ -72,7 +79,7 @@ func (i *Indexer) IndexData(doc map[string]interface{}) error {
 
 // UpdateData realiza um Partial Update. Usamos map[string]interface{} para evitar
 // que zero-values (strings vazias, 0) de uma struct sobrescrevam os dados originais no banco.
-func (i *Indexer) UpdateData(doc map[string]interface{}) error {
+func (i *MeilisearchIndexer) UpdateData(doc map[string]interface{}) error {
 	pk := "invite_code"
 	task, err := i.client.Index(i.indexName).UpdateDocuments([]map[string]interface{}{doc}, &meilisearch.DocumentOptions{PrimaryKey: &pk})
 	if err != nil {
@@ -84,7 +91,7 @@ func (i *Indexer) UpdateData(doc map[string]interface{}) error {
 }
 
 // GetDocument busca um documento específico no Meilisearch
-func (i *Indexer) GetDocument(pk string) (*SearchDoc, error) {
+func (i *MeilisearchIndexer) GetDocument(pk string) (*SearchDoc, error) {
 	var doc SearchDoc
 	err := i.client.Index(i.indexName).GetDocument(pk, &meilisearch.DocumentQuery{}, &doc)
 	if err != nil {
