@@ -48,11 +48,11 @@ func NewDiscoveryService(js nats.JetStreamContext, rdb *redis.Client, srcs []sou
 	}
 }
 
-// EnsureStream garante que o stream SCRAPE exista no JetStream.
+// EnsureStream garante que o stream exista no JetStream.
 func EnsureStream(js nats.JetStreamContext) error {
 	_, err := js.AddStream(&nats.StreamConfig{
-		Name:     "SCRAPE",
-		Subjects: []string{"jobs.scrape"},
+		Name:     "argus-scraper",
+		Subjects: []string{"jobs.scrape", "jobs.scrape.>"},
 		Storage:  nats.FileStorage,
 	})
 	if err != nil {
@@ -62,8 +62,8 @@ func EnsureStream(js nats.JetStreamContext) error {
 		}
 		// Tenta atualizar se já existe com config diferente
 		_, updateErr := js.UpdateStream(&nats.StreamConfig{
-			Name:     "SCRAPE",
-			Subjects: []string{"jobs.scrape"},
+			Name:     "argus-scraper",
+			Subjects: []string{"jobs.scrape", "jobs.scrape.>"},
 			Storage:  nats.FileStorage,
 		})
 		if updateErr != nil {

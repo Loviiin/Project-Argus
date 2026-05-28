@@ -41,11 +41,11 @@ func main() {
 	}
 	defer nc.Close()
 
-	// Garante que o stream SCRAPE existe
+	// Garante que o stream argus-scraper existe
 	if err := service.EnsureStream(js); err != nil {
-		log.Fatal("Erro criando stream SCRAPE:", err)
+		log.Fatal("Erro criando stream argus-scraper:", err)
 	}
-	log.Println("Stream SCRAPE (jobs.scrape) pronto")
+	log.Println("Stream argus-scraper (jobs.scrape) pronto")
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.Redis.Address,
