@@ -36,6 +36,11 @@ type Config struct {
 		ReplyWorkers int `yaml:"reply_workers"`
 	} `yaml:"scraper"`
 
+	Supabase struct {
+		URL string `yaml:"url"`
+		Key string `yaml:"key"`
+	} `yaml:"supabase"`
+
 	Redis struct {
 		Address  string `yaml:"address"`
 		Password string `yaml:"password"`

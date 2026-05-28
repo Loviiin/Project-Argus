@@ -23,6 +23,7 @@ type Artifact struct {
 type Repository interface {
 	Save(ctx context.Context, a Artifact) (string, error)
 	UpdateEnrichedData(ctx context.Context, inviteCode, serverName, serverID, icon string, memberCount int, status string) error
+	UpdateStatus(ctx context.Context, inviteCode, status string) error
 	Close(ctx context.Context)
 }
 
@@ -93,6 +94,16 @@ func (r *PostgresRepository) UpdateEnrichedData(ctx context.Context, inviteCode,
 		WHERE discord_invite_code = $1
 	`
 	_, err := r.db.Exec(ctx, query, inviteCode, serverName, serverID, icon, memberCount, status)
+	return err
+}
+
+func (r *PostgresRepository) UpdateStatus(ctx context.Context, inviteCode, status string) error {
+	query := `
+		UPDATE artifacts 
+		SET discord_status = $2
+		WHERE discord_invite_code = $1
+	`
+	_, err := r.db.Exec(ctx, query, inviteCode, status)
 	return err
 }
 

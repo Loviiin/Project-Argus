@@ -9,25 +9,26 @@ import (
 )
 
 type SQLiteRepository struct {
-	db *sql.DB
+	dbRead  *sql.DB
+	dbWrite *sql.DB
 }
 
 func NewSQLiteRepository(path string) (*SQLiteRepository, error) {
-	db, err := sql.Open("sqlite", path)
+	dbPath := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)"
+	
+	dbWrite, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("falha ao abrir sqlite: %w", err)
+		return nil, fmt.Errorf("falha ao abrir sqlite write: %w", err)
 	}
+	dbWrite.SetMaxOpenConns(1)
 
-	// Ativando WAL e otimizações de concorrência
-	if _, err := db.Exec(`
-		PRAGMA journal_mode=WAL;
-		PRAGMA synchronous=NORMAL;
-		PRAGMA busy_timeout=5000;
-	`); err != nil {
-		return nil, fmt.Errorf("falha ao configurar PRAGMA: %w", err)
+	dbRead, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao abrir sqlite read: %w", err)
 	}
+	dbRead.SetMaxOpenConns(10)
 
-	repo := &SQLiteRepository{db: db}
+	repo := &SQLiteRepository{dbRead: dbRead, dbWrite: dbWrite}
 
 	if err := repo.runMigrations(context.Background()); err != nil {
 		return nil, fmt.Errorf("falha ao rodar migrations do sqlite: %w", err)
@@ -90,13 +91,23 @@ func (r *SQLiteRepository) runMigrations(ctx context.Context) error {
 		reply_comment_total INTEGER DEFAULT 0,
 		uid TEXT,
 		nickname TEXT,
+		unique_id TEXT,
+		avatar_url TEXT,
 		created_at DATETIME,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		reply_id TEXT
 	);
+
+	-- Adicionar colunas caso a tabela já exista
+	ALTER TABLE comments ADD COLUMN unique_id TEXT;
+	ALTER TABLE comments ADD COLUMN avatar_url TEXT;
 	`
-	_, err := r.db.ExecContext(ctx, query)
-	return err
+	// Ignoramos o erro do ALTER TABLE pois se as colunas já existirem ele falha graciosamente
+	r.dbWrite.ExecContext(ctx, query)
+	
+	// Adicionar índices para otimizar queries
+	r.dbWrite.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_comments_nickname ON comments(nickname);")
+	return nil
 }
 
 func (r *SQLiteRepository) Save(ctx context.Context, a Artifact) (string, error) {
@@ -112,7 +123,7 @@ func (r *SQLiteRepository) Save(ctx context.Context, a Artifact) (string, error)
 		RETURNING id
 	`
 	var id string
-	err := r.db.QueryRowContext(ctx, query,
+	err := r.dbWrite.QueryRowContext(ctx, query,
 		a.SourceURL,
 		a.AuthorID,
 		a.DiscordInviteCode,
@@ -134,17 +145,30 @@ func (r *SQLiteRepository) UpdateEnrichedData(ctx context.Context, inviteCode, s
 		    discord_server_id = ?,
 		    discord_icon = ?,
 		    discord_member_count = ?,
-			discord_status = ?
+			discord_status = ?,
+			processed_at = CURRENT_TIMESTAMP
 		WHERE discord_invite_code = ?
 	`
-	_, err := r.db.ExecContext(ctx, query, serverName, serverID, icon, memberCount, status, inviteCode)
+	_, err := r.dbWrite.ExecContext(ctx, query, serverName, serverID, icon, memberCount, status, inviteCode)
+	return err
+}
+
+func (r *SQLiteRepository) UpdateStatus(ctx context.Context, inviteCode, status string) error {
+	query := `
+		UPDATE artifacts 
+		SET discord_status = ?,
+		    processed_at = CURRENT_TIMESTAMP
+		WHERE discord_invite_code = ?
+	`
+	_, err := r.dbWrite.ExecContext(ctx, query, status, inviteCode)
 	return err
 }
 
 func (r *SQLiteRepository) Close(ctx context.Context) {
-	r.db.Close()
+	r.dbRead.Close()
+	r.dbWrite.Close()
 }
 
 func (r *SQLiteRepository) DB() *sql.DB {
-	return r.db
+	return r.dbRead
 }

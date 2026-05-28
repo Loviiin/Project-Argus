@@ -49,17 +49,24 @@ func main() {
 	defer nc.Close()
 
 	streamCfg := &nats.StreamConfig{
-		Name:     "SCRAPE",
+		Name:     "argus-scraper",
 		Subjects: []string{"jobs.scrape", "jobs.scrape.>"},
 		Storage:  nats.FileStorage,
 	}
 	_, err = js.AddStream(streamCfg)
-	if err != nil && err == nats.ErrStreamNameAlreadyInUse {
-		// Se já existe, apenas atualizamos para adicionar os novos subjects
-		_, err = js.UpdateStream(streamCfg)
-	}
-	if err != nil {
+	if err != nil && err != nats.ErrStreamNameAlreadyInUse {
 		log.Printf("Aviso ao configurar Stream SCRAPE: %v", err)
+	}
+
+	// Cria Stream DLQ do scraper para evitar loop infinito de NumDelivered > 15
+	dlqCfg := &nats.StreamConfig{
+		Name:     "argus-scraper-dlq",
+		Subjects: []string{"argus.dlq.scraper"},
+		Storage:  nats.FileStorage,
+	}
+	_, err = js.AddStream(dlqCfg)
+	if err != nil && err != nats.ErrStreamNameAlreadyInUse {
+		log.Printf("Aviso ao configurar Stream DLQ: %v", err)
 	}
 
 	// --- Redis ---
@@ -75,7 +82,8 @@ func main() {
 	var db *sql.DB
 	var dbErr error
 	if cfg.Database.Type == "sqlite" {
-		db, dbErr = sql.Open("sqlite", cfg.Database.SQLitePath)
+		dbPath := cfg.Database.SQLitePath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)"
+		db, dbErr = sql.Open("sqlite", dbPath)
 	} else {
 		db, dbErr = sql.Open("postgres", cfg.Database.URL)
 	}
@@ -83,15 +91,7 @@ func main() {
 		log.Fatal("Erro conexão Banco:", dbErr)
 	}
 
-	if cfg.Database.Type == "sqlite" {
-		if _, err := db.Exec(`
-			PRAGMA journal_mode=WAL;
-			PRAGMA synchronous=NORMAL;
-			PRAGMA busy_timeout=10000;
-		`); err != nil {
-			log.Printf("Aviso: falha ao configurar PRAGMA SQLite no scraper: %v", err)
-		}
-	}
+	// Removido SetMaxOpenConns(1) para evitar starvation
 	if err = db.Ping(); err != nil {
 		log.Fatal("Erro ping Banco:", err)
 	}

@@ -25,6 +25,7 @@ import (
 	"parser/internal/logic"
 	"parser/internal/repository"
 	"parser/internal/search"
+	"parser/internal/api"
 
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
@@ -50,6 +51,13 @@ func main() {
 		}
 		repo = sqliteRepo
 		indexer = search.NewSQLiteFTS5Indexer(sqliteRepo.DB())
+
+		apiServer := api.NewServer(sqliteRepo.DB())
+		go func() {
+			if err := apiServer.Start(":8080"); err != nil {
+				log.Printf("Erro no servidor da API: %v", err)
+			}
+		}()
 	} else {
 		pgRepo, errDB := repository.NewPostgresRepository(cfg.Database.URL)
 		if errDB != nil {
@@ -59,6 +67,8 @@ func main() {
 		indexer = search.NewIndexer(cfg.Meilisearch.Host, cfg.Meilisearch.Key, cfg.Meilisearch.Index)
 	}
 	defer repo.Close(context.Background())
+
+	supabaseClient := client.NewSupabaseClient(cfg.Supabase.URL, cfg.Supabase.Key)
 
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {
@@ -200,6 +210,13 @@ func main() {
 					return
 				}
 
+				// Webhook Supabase assíncrono
+				go func(invCode, pSourceUrl, pRawOcr, pAuthorId string, pIsReply bool) {
+					if err := supabaseClient.SendArtifact(invCode, "", pSourceUrl, pRawOcr, pAuthorId, pIsReply); err != nil {
+						log.Printf("[Webhook] Erro ao enviar para Supabase: %v", err)
+					}
+				}(inviteCode, payload.SourcePath, payload.TextContent, author, payload.IsReply)
+
 				loc, _ := time.LoadLocation("America/Sao_Paulo")
 				nowSP := time.Now().In(loc)
 
@@ -278,7 +295,8 @@ func main() {
 		}
 
 		if meta.NumDelivered > 15 {
-			log.Printf("[Enricher] 🚨 Max Retries atingido para %s. Enviando para DLQ...", job.InviteCode)
+			log.Printf("[Enricher] 🚨 Max Retries atingido para %s. Marcando como rate_limited e enviando para DLQ...", job.InviteCode)
+			repo.UpdateStatus(context.Background(), job.InviteCode, "rate_limited")
 			dlqData, _ := json.Marshal(map[string]interface{}{
 				"error":    "Max retries exceeded",
 				"job":      job,
@@ -305,9 +323,10 @@ func main() {
 		if err != nil {
 			errMsg := strings.ToLower(err.Error())
 			if strings.Contains(errMsg, "rate limited") || strings.Contains(errMsg, "429") || strings.Contains(errMsg, "circuit breaker") {
-				delay := 5*time.Minute + time.Duration(rand.Intn(60))*time.Second
-				fmt.Printf("[Enricher] Circuit Breaker / Rate limit para %s. Nak com Jitter: %v\n", job.InviteCode, delay)
-				msg.NakWithDelay(delay)
+				fmt.Printf("[Enricher] Circuit Breaker / Rate limit ativo. Estacionando %s como rate_limited.\n", job.InviteCode)
+				repo.UpdateStatus(context.Background(), job.InviteCode, "rate_limited")
+				dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
+				msg.Ack()
 				return
 			}
 			if strings.Contains(errMsg, "inválido ou expirado") || strings.Contains(errMsg, "404") {
@@ -318,7 +337,7 @@ func main() {
 					"invite_code": job.InviteCode,
 					"status":      "expired",
 				})
-				repo.UpdateEnrichedData(context.Background(), job.InviteCode, "", "", "", 0, "expired")
+				repo.UpdateStatus(context.Background(), job.InviteCode, "expired")
 
 				dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
 				msg.Ack()

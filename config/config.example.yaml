@@ -33,7 +33,7 @@ discovery:
 
 tiktok:
   # Cookie completo do TikTok. Use F12 -> Network -> Copie a string do `Cookie:` das requests search/general/full/
-  ttwid: "1%7CrqmOgwTmVGTtx2_LeAf3mwKnHkVPXPusWim27KOQlTE%7C1779849715%7Cef40cdd8fb8c8c183aa78a22f71d9132d5080878bece937b808874b295d9e3b2"
+  ttwid: "1%7Ccm_fSg1t_LLvkUglmM604-Sad55thoavyobP5EYxxPc%7C1779931418%7C974e44ad69b228362ba50f0b36bd400569dea7808d729f15b86cf9cc67fcaa6b"
   
   # URL do sidecar Evil0ctal (Docker local)
   sidecar_url: "http://sidecar:8080"
@@ -58,3 +58,7 @@ nats:
 scraper:
   workers: 2
   browser_state_dir: "./browser_state_worker"
+
+supabase:
+  url: ""
+  key: ""

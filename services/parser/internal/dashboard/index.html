@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Argus Lite | OSINT Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f1115;
+            --surface-color: rgba(25, 28, 36, 0.6);
+            --surface-hover: rgba(45, 48, 56, 0.8);
+            --primary: #5865F2; /* Discord Blurple */
+            --primary-hover: #4752C4;
+            --text-main: #f2f3f5;
+            --text-muted: #a3a6aa;
+            --border: rgba(255, 255, 255, 0.08);
+            --glass-blur: blur(12px);
+            --success: #23a559;
+            --danger: #da373c;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: radial-gradient(circle at 15% 50%, rgba(88, 101, 242, 0.08), transparent 25%),
+                              radial-gradient(circle at 85% 30%, rgba(234, 51, 92, 0.05), transparent 25%);
+            color: var(--text-main);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Header & Nav */
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(15, 17, 21, 0.8);
+            backdrop-filter: var(--glass-blur);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #5865F2, #EA335C);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 0.5rem 1rem;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-main);
+            background: var(--surface-hover);
+        }
+
+        .tab-btn.active {
+            color: white;
+            background: var(--surface-color);
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        /* Content Area */
+        main {
+            padding: 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .page {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Grid Layouts */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 1.5rem;
+        }
+
+        /* Cards (Glassmorphism) */
+        .card {
+            background: var(--surface-color);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+            border-color: rgba(255,255,255,0.15);
+        }
+
+        /* Artifact Card Specifics */
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .discord-info {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .discord-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            background: #2b2d31;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: white;
+            object-fit: cover;
+        }
+
+        .server-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-main);
+            margin-bottom: 0.25rem;
+        }
+
+        .server-meta {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .status-valid { background: rgba(88, 101, 242, 0.2); color: #5865f2; border: 1px solid rgba(88, 101, 242, 0.3); }
+        .status-invalid { background: rgba(237, 66, 69, 0.2); color: #ed4245; border: 1px solid rgba(237, 66, 69, 0.3); }
+        .status-unknown { background: rgba(255, 255, 255, 0.1); color: #dcddde; border: 1px solid rgba(255, 255, 255, 0.2); }
+        .status-rate-limited { background: rgba(254, 231, 92, 0.2); color: #fee75c; border: 1px solid rgba(254, 231, 92, 0.3); }   /* Author Section */
+        .author-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            background: rgba(0,0,0,0.2);
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.03);
+        }
+
+        .author-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #333;
+            object-fit: cover;
+        }
+
+        .author-name {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #fff;
+        }
+
+        .author-sub {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Buttons */
+        .action-row {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: auto;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 0.75rem;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+            text-decoration: none;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-primary:hover { background: var(--primary-hover); }
+
+        .btn-secondary {
+            background: rgba(255,255,255,0.08);
+            color: white;
+        }
+        .btn-secondary:hover { background: rgba(255,255,255,0.15); }
+
+        /* Comments Specific */
+        .comment-text {
+            font-size: 0.95rem;
+            line-height: 1.5;
+            color: #d1d2d5;
+            margin: 0.5rem 0;
+            word-break: break-word;
+        }
+        
+        .comment-stats {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            grid-column: 1 / -1;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem;
+            color: var(--text-muted);
+            background: var(--surface-color);
+            border-radius: 16px;
+            border: 1px dashed var(--border);
+            grid-column: 1 / -1;
+        }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 2rem;
+            padding-bottom: 2rem;
+        }
+        .pagination button {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .pagination button:hover:not(:disabled) {
+            background: rgba(255,255,255,0.2);
+        }
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">
+            <i class="fa-solid fa-eye"></i> Argus Lite
+        </div>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('artifacts')">
+                <i class="fa-brands fa-discord"></i> Servidores
+            </button>
+            <button class="tab-btn" onclick="switchTab('comments')">
+                <i class="fa-brands fa-tiktok"></i> Comentários
+            </button>
+            <!-- Link para o SQLite Web que o usuário aprovou -->
+            <a href="http://db.seu-dominio.com" target="_blank" class="tab-btn" style="text-decoration: none;">
+                <i class="fa-solid fa-database"></i> SQLite Web
+            </a>
+        </div>
+    </header>
+
+    <main>
+        <!-- Artifacts Page -->
+        <div id="artifacts" class="page active">
+            
+            <div style="display: flex; justify-content: flex-end; margin-bottom: 1rem; align-items: center; gap: 0.5rem;">
+                <label style="color: rgba(255,255,255,0.7);">Filtrar por Status:</label>
+                <select id="status-filter" onchange="loadArtifacts(1)" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.1); padding: 5px 10px; border-radius: 4px; cursor: pointer; outline: none;">
+                    <option value="ALL">Mostrar Todos</option>
+                    <option value="VALID">Apenas Válidos</option>
+                    <option value="PENDING">Apenas Pendentes</option>
+                    <option value="EXPIRED">Apenas Expirados/Inválidos</option>
+                    <option value="RATE_LIMITED">Apenas Bloqueados (Rate Limit)</option>
+                </select>
+            </div>
+
+            <div class="grid" id="artifacts-grid">
+                <div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando servidores...</div>
+            </div>
+            <div class="pagination">
+                <button onclick="changePage('artifacts', -1)" id="btn-prev-artifacts" disabled>Anterior</button>
+                <span id="page-num-artifacts">Página 1</span>
+                <button onclick="changePage('artifacts', 1)" id="btn-next-artifacts">Próxima</button>
+            </div>
+        </div>
+
+        <!-- Comments Page -->
+        <div id="comments" class="page">
+            <div class="grid" id="comments-grid">
+                <div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando comentários...</div>
+            </div>
+            <div class="pagination">
+                <button onclick="changePage('comments', -1)" id="btn-prev-comments" disabled>Anterior</button>
+                <span id="page-num-comments">Página 1</span>
+                <button onclick="changePage('comments', 1)" id="btn-next-comments">Próxima</button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Lógica de Tabs
+        let currentArtifactsPage = 1;
+        let currentCommentsPage = 1;
+        const limit = 50;
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            
+            document.getElementById(tabId).classList.add('active');
+            event.currentTarget.classList.add('active');
+
+            if(tabId === 'artifacts' && currentArtifactsPage === 1) loadArtifacts();
+            if(tabId === 'comments' && currentCommentsPage === 1) loadComments();
+        }
+
+        // Utils
+        const formatDate = (dateStr) => {
+            if(!dateStr) return '';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+        };
+
+        const escapeHtml = (unsafe) => {
+            return (unsafe || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        };
+
+        // Render Artifacts
+        async function loadArtifacts(page = 1) {
+            currentArtifactsPage = page;
+            const offset = (page - 1) * limit;
+            const statusFilter = document.getElementById('status-filter').value;
+            const grid = document.getElementById('artifacts-grid');
+            document.getElementById('page-num-artifacts').innerText = `Página ${page}`;
+            document.getElementById('btn-prev-artifacts').disabled = page === 1;
+
+            grid.innerHTML = '<div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando servidores...</div>';
+            try {
+                const res = await fetch(`/api/artifacts?limit=${limit}&offset=${offset}&status=${statusFilter}`);
+                const data = await res.json();
+                
+                if(!data || data.length === 0) {
+                    grid.innerHTML = `<div class="empty-state"><i class="fa-solid fa-ghost fa-3x" style="margin-bottom:1rem;opacity:0.5"></i><br>Nenhum servidor encontrado ainda.</div>`;
+                    return;
+                }
+
+                grid.innerHTML = data.map(item => {
+                    const status = (item.discord_status || 'UNKNOWN').toUpperCase();
+                    let statusClass = 'status-unknown';
+                    if (status === 'ACTIVE' || status === 'VALID') statusClass = 'status-valid';
+                    else if (status === 'INVALID' || status === 'EXPIRED') statusClass = 'status-invalid';
+                    else if (status === 'RATE_LIMITED') statusClass = 'status-rate-limited';
+
+                    const serverName = item.discord_server_name || 'Desconhecido';
+                    
+                    let iconUrl = null;
+                    if (item.discord_icon) {
+                        if (item.discord_icon.startsWith('http')) {
+                            iconUrl = item.discord_icon;
+                        } else {
+                            iconUrl = `https://cdn.discordapp.com/icons/${item.discord_server_id}/${item.discord_icon}.png`;
+                        }
+                    }
+                    const avatarUrl = item.avatar_url || 'https://ui-avatars.com/api/?name=' + item.author_id + '&background=random';
+                    
+                    const codes = item.discord_invite_codes ? item.discord_invite_codes.split(',') : [];
+                    const inviteUrl = codes.length > 0 ? `https://discord.gg/${codes[0]}` : '#';
+                    const videoUrl = item.source_url;
+                    const date = new Date(item.processed_at).toLocaleString('pt-BR');
+                    
+                    let codesHtml = '';
+                    const visibleCodes = codes.slice(0, 5);
+                    const hiddenCodes = codes.slice(5);
+
+                    visibleCodes.forEach(code => {
+                        codesHtml += `<span style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; color: #ddd; margin-right: 4px; margin-bottom: 4px; display: inline-block; border: 1px solid rgba(255,255,255,0.1);"><i class="fa-solid fa-link"></i> ${code}</span>`;
+                    });
+
+                    if (hiddenCodes.length > 0) {
+                        let hiddenHtml = '';
+                        hiddenCodes.forEach(code => {
+                            hiddenHtml += `<span style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; color: #ddd; margin-right: 4px; margin-bottom: 4px; display: inline-block; border: 1px solid rgba(255,255,255,0.1);"><i class="fa-solid fa-link"></i> ${code}</span>`;
+                        });
+                        const hiddenId = 'hidden-codes-' + Math.random().toString(36).substr(2, 9);
+                        codesHtml += `
+                            <div id="${hiddenId}" style="display: none; margin-top: 4px;">
+                                ${hiddenHtml}
+                            </div>
+                            <button onclick="const el = document.getElementById('${hiddenId}'); if(el.style.display==='none'){el.style.display='block';this.innerText='Esconder'}else{el.style.display='none';this.innerHTML='+ ${hiddenCodes.length} códigos...'}" style="background: none; border: none; color: #5865f2; font-size: 0.75rem; cursor: pointer; padding: 0; margin-top: 4px;">
+                                + ${hiddenCodes.length} códigos...
+                            </button>
+                        `;
+                    }
+
+                    return `
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="discord-info">
+                                    ${iconUrl ? `<img src="${iconUrl}" class="discord-icon" onerror="this.onerror=null; this.src='https://cdn.discordapp.com/embed/avatars/0.png';">` : '<div class="discord-icon" style="background: var(--surface-light); display: flex; align-items: center; justify-content: center;"><i class="fa-brands fa-discord" style="color: #5865f2; font-size: 1.5rem;"></i></div>'}
+                                    <div class="server-details">
+                                        <h3 class="server-name">${serverName}</h3>
+                                        <div class="member-count">
+                                            <i class="fa-solid fa-users"></i> ${item.discord_member_count || 0} membros
+                                            <span style="color: #f39c12; margin-left: 8px;"><i class="fa-solid fa-fire"></i> Apareceu ${item.mentions_count}x</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <span class="status-badge ${statusClass}">${status}</span>
+                            </div>
+                            
+                            <div style="margin: 10px 15px;">
+                                ${codesHtml}
+                            </div>
+
+                            <div class="author-section">
+                                <img src="${avatarUrl}" class="author-avatar" onerror="this.src='https://ui-avatars.com/api/?name=${item.author_id}&background=random'">
+                                <div class="author-info">
+                                    <div class="author-name">@${item.author_id}</div>
+                                    <div class="post-date">Último envio em ${date}</div>
+                                </div>
+                            </div>
+
+                            <div class="action-row" style="margin: 0 15px 15px 15px;">
+                                <a href="${inviteUrl}" target="_blank" class="btn btn-primary">
+                                    <i class="fa-solid fa-right-to-bracket"></i> Entrar
+                                </a>
+                                <a href="${videoUrl}" target="_blank" class="btn btn-secondary">
+                                    <i class="fa-brands fa-tiktok"></i> Vídeo Original
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+                document.getElementById('btn-next-artifacts').disabled = data.length < limit;
+            } catch (err) {
+                grid.innerHTML = `<div class="empty-state">Erro ao carregar dados: ${err.message}</div>`;
+            }
+        }
+
+        // Render Comments
+        async function loadComments(page = 1) {
+            currentCommentsPage = page;
+            const offset = (page - 1) * limit;
+            const grid = document.getElementById('comments-grid');
+            document.getElementById('page-num-comments').innerText = `Página ${page}`;
+            document.getElementById('btn-prev-comments').disabled = page === 1;
+
+            grid.innerHTML = '<div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando comentários...</div>';
+            try {
+                const res = await fetch(`/api/comments?limit=${limit}&offset=${offset}`);
+                const data = await res.json();
+                
+                if(!data || data.length === 0) {
+                    grid.innerHTML = `<div class="empty-state"><i class="fa-solid fa-comment-slash fa-3x" style="margin-bottom:1rem;opacity:0.5"></i><br>Nenhum comentário coletado ainda.</div>`;
+                    return;
+                }
+
+                grid.innerHTML = data.map(item => {
+                    const avatarUrl = item.avatar_url || 'https://ui-avatars.com/api/?name=' + item.nickname + '&background=random';
+                    const videoUrl = `https://www.tiktok.com/@${item.unique_id}/video/${item.aweme_id}#comment-${item.cid}`;
+
+                    return `
+                    <div class="card">
+                        <div class="author-section" style="background:transparent; padding:0; border:none;">
+                            <img src="${avatarUrl}" class="author-avatar" onerror="this.src='https://ui-avatars.com/api/?name=${item.nickname}&background=random'">
+                            <div>
+                                <div class="author-name">${escapeHtml(item.nickname)} <span style="color:var(--text-muted); font-size:0.8rem">@${item.unique_id || item.nickname}</span></div>
+                                <div class="author-sub">${formatDate(item.created_at)}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="comment-text">
+                            ${escapeHtml(item.text)}
+                        </div>
+
+                        <div style="margin-top:auto; display:flex; justify-content:space-between; align-items:center;">
+                            <div class="comment-stats">
+                                <span><i class="fa-solid fa-heart"></i> ${item.digg_count || 0}</span>
+                            </div>
+                            <a href="${videoUrl}" target="_blank" class="btn btn-secondary" style="padding: 0.5rem 1rem;">
+                                Ver no TikTok
+                            </a>
+                        </div>
+                    </div>
+                    `;
+                }).join('');
+                
+                document.getElementById('btn-next-comments').disabled = data.length < limit;
+            } catch (err) {
+                grid.innerHTML = `<div class="empty-state">Erro ao carregar dados: ${err.message}</div>`;
+            }
+        }
+
+        function changePage(tab, delta) {
+            if(tab === 'artifacts') {
+                loadArtifacts(currentArtifactsPage + delta);
+            } else {
+                loadComments(currentCommentsPage + delta);
+            }
+        }
+
+        // Initial Load
+        loadArtifacts();
+    </script>
+</body>
+</html>

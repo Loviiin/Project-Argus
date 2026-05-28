@@ -124,6 +124,10 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 			User              struct {
 				Uid      string `json:"uid"`
 				Nickname string `json:"nickname"`
+				UniqueId string `json:"unique_id"`
+				AvatarThumb struct {
+					UrlList []string `json:"url_list"`
+				} `json:"avatar_thumb"`
 			} `json:"user"`
 			CreateTime int64 `json:"create_time"`
 		} `json:"comments"`
@@ -151,20 +155,26 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		now := time.Now()
 
 		query := `
-			INSERT INTO comments (cid, aweme_id, reply_id, text, digg_count, reply_comment_total, uid, nickname, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			INSERT INTO comments (cid, aweme_id, reply_id, text, digg_count, reply_comment_total, uid, nickname, unique_id, avatar_url, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT (cid) DO UPDATE SET
 				digg_count = EXCLUDED.digg_count,
 				reply_comment_total = EXCLUDED.reply_comment_total,
-				updated_at = $10
+				avatar_url = EXCLUDED.avatar_url,
+				updated_at = $12
 		`
 		var replyID sql.NullString
 		if job.CommentID != "" {
 			replyID = sql.NullString{String: job.CommentID, Valid: true}
 		}
 
+		avatarURL := ""
+		if len(c.User.AvatarThumb.UrlList) > 0 {
+			avatarURL = c.User.AvatarThumb.UrlList[0]
+		}
+
 		_, err := p.db.ExecContext(ctx, query,
-			c.Cid, job.VideoID, replyID, c.Text, c.DiggCount, c.ReplyCommentTotal, c.User.Uid, c.User.Nickname, createdAt, now)
+			c.Cid, job.VideoID, replyID, c.Text, c.DiggCount, c.ReplyCommentTotal, c.User.Uid, c.User.Nickname, c.User.UniqueId, avatarURL, createdAt, now)
 		if err != nil {
 			log.Printf("[Worker] ⚠️ Erro ao inserir comentário %s: %v", c.Cid, err)
 		} else {

@@ -22,5 +22,6 @@ FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/bin .
+COPY --from=builder /workspaces/Project-Argus/services/parser/internal/dashboard ./internal/dashboard
 ENV CONFIG_PATH=/workspaces/Project-Argus/config/config.yaml
 CMD ["./bin"]

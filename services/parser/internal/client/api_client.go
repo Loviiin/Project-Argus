@@ -76,8 +76,8 @@ func (c *HTTPDiscordClient) GetInviteInfo(ctx context.Context, inviteCode string
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusTooManyRequests {
-		c.rdb.Set(ctx, circuitKey, "1", 5*time.Minute)
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
+		c.rdb.Set(ctx, circuitKey, "1", 24*time.Hour)
 		return nil, fmt.Errorf("rate limited (muitas requisições)")
 	}
 

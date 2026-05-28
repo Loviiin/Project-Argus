@@ -41,6 +41,7 @@ services:
       - ./data:/app/data
     ports:
       - "6060:6060" # Pprof
+      - "8082:8080" # Web Dashboard
     depends_on:
       - nats
       - redis
@@ -97,3 +98,13 @@ services:
       - nats
       - redis
       - sidecar
+
+  sqlite-web:
+    image: coleifer/sqlite-web
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - SQLITE_DATABASE=argus.db
+    restart: unless-stopped
