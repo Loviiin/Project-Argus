@@ -24,6 +24,7 @@ type Repository interface {
 	Save(ctx context.Context, a Artifact) (string, error)
 	UpdateEnrichedData(ctx context.Context, inviteCode, serverName, serverID, icon string, memberCount int, status string) error
 	UpdateStatus(ctx context.Context, inviteCode, status string) error
+	GetRateLimitedInvites(ctx context.Context, limit int) ([]string, error)
 	Close(ctx context.Context)
 }
 
@@ -109,4 +110,29 @@ func (r *PostgresRepository) UpdateStatus(ctx context.Context, inviteCode, statu
 
 func (r *PostgresRepository) Close(ctx context.Context) {
 	r.db.Close()
+}
+
+func (r *PostgresRepository) GetRateLimitedInvites(ctx context.Context, limit int) ([]string, error) {
+	query := `
+		SELECT DISTINCT discord_invite_code 
+		FROM artifacts 
+		WHERE UPPER(discord_status) = 'RATE_LIMITED'
+		  AND (discord_server_name IS NULL OR discord_server_name = '')
+		LIMIT $1
+	`
+	rows, err := r.db.Query(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var invites []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			continue
+		}
+		invites = append(invites, code)
+	}
+	return invites, nil
 }

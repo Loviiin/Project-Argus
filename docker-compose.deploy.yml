@@ -22,7 +22,7 @@ services:
     environment:
       - PORT=8080
       - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
     deploy:
       resources:
         limits:

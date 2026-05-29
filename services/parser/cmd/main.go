@@ -325,7 +325,7 @@ func main() {
 			if strings.Contains(errMsg, "rate limited") || strings.Contains(errMsg, "429") || strings.Contains(errMsg, "circuit breaker") {
 				fmt.Printf("[Enricher] Circuit Breaker / Rate limit ativo. Estacionando %s como rate_limited.\n", job.InviteCode)
 				repo.UpdateStatus(context.Background(), job.InviteCode, "rate_limited")
-				dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
+				// NÃO marca como seen — o recovery goroutine vai retentar quando o circuit breaker liberar
 				msg.Ack()
 				return
 			}
@@ -398,6 +398,42 @@ func main() {
 	if err != nil {
 		log.Fatalf("Erro ao iniciar Discord Enricher: %v", err)
 	}
+
+	// ==========================================
+	// 3. RECOVERY: Re-enrich rate_limited invites
+	// ==========================================
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			circuitKey := "argus:circuit_breaker:discord"
+			if exists, _ := rdb.Exists(context.Background(), circuitKey).Result(); exists > 0 {
+				// Circuit breaker ainda ativo, não tenta nada
+				continue
+			}
+
+			invites, err := repo.GetRateLimitedInvites(context.Background(), 50)
+			if err != nil {
+				log.Printf("[Recovery] Erro buscando invites rate_limited: %v", err)
+				continue
+			}
+
+			if len(invites) == 0 {
+				continue
+			}
+
+			fmt.Printf("[Recovery] Circuit breaker livre. Re-publicando %d invites rate_limited...\n", len(invites))
+			for _, code := range invites {
+				// Limpa a flag de dedup pra esse invite poder ser processado
+				dedupSv.RDB().Del(context.Background(), fmt.Sprintf("argus:processed_job:%s", code))
+
+				enrichJob, _ := json.Marshal(dto.DiscordEnrichJob{InviteCode: code})
+				if _, err := js.Publish("jobs.enrich.discord", enrichJob); err != nil {
+					log.Printf("[Recovery] Erro re-publicando %s: %v", code, err)
+				}
+			}
+		}
+	}()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

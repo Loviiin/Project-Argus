@@ -172,3 +172,28 @@ func (r *SQLiteRepository) Close(ctx context.Context) {
 func (r *SQLiteRepository) DB() *sql.DB {
 	return r.dbRead
 }
+
+func (r *SQLiteRepository) GetRateLimitedInvites(ctx context.Context, limit int) ([]string, error) {
+	query := `
+		SELECT DISTINCT discord_invite_code 
+		FROM artifacts 
+		WHERE UPPER(discord_status) = 'RATE_LIMITED'
+		  AND (discord_server_name IS NULL OR discord_server_name = '')
+		LIMIT ?
+	`
+	rows, err := r.dbRead.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var invites []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			continue
+		}
+		invites = append(invites, code)
+	}
+	return invites, nil
+}

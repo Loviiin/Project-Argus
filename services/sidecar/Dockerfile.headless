@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 # Ignorar dependências opcionais e Chromium downloader via ENV
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 RUN npm install --omit=dev
 
