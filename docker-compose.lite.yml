@@ -100,7 +100,9 @@ services:
       - sidecar
 
   sqlite-web:
-    image: coleifer/sqlite-web
+    image: ghcr.io/coleifer/sqlite-web:latest
+    platform: linux/amd64
+    command: /data/argus.db
     ports:
       - "8083:8080"
     volumes:
