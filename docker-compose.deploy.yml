@@ -23,6 +23,7 @@ services:
       - PORT=8080
       - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+      - SIDECAR_API_KEY=${SIDECAR_API_KEY:-}
     deploy:
       resources:
         limits:
@@ -34,6 +35,7 @@ services:
     environment:
       - CONFIG_PATH=/app/config.yaml
       - GOMEMLIMIT=50MiB
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-*}
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./data:/app/data

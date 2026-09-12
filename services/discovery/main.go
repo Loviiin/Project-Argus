@@ -28,7 +28,7 @@ func main() {
 	// Inicia Pprof em background
 	go func() {
 		log.Println("Iniciando Pprof do Discovery na porta :6060")
-		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
 	}()
 
 	nc, err := nats.Connect(cfg.Nats.URL)

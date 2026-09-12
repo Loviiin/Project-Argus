@@ -1,0 +1,64 @@
+app:
+  env: "local"
+
+browser:
+  # Se false, abre a janela do Chrome (Útil para VNC/Resolver Captcha).
+  # Se true, roda em background com --headless=new (Para produção autônoma).
+  headless: false
+
+discord:
+  fetch_mode: "scraper"
+  token: "your_token_here"
+  proxy: "" # optional, e.g. "http://user:pass@ip:port"
+
+database:
+  type: "sqlite"
+  sqlite_path: "./data/argus.db"
+  url: "postgres://argus-user:change_me@127.0.0.1:5432/argus-post-db?sslmode=disable"
+
+discovery:
+  hashtags:
+    - "discordserver"
+    - "discord"
+    - "gamingcommunity"
+    - "discordinvite"
+    - "panelinha discord"
+    - "paneleira"
+    - "panela"
+    - "servidores discord"
+    - "soudopapai"
+    - "madeindiscord"
+  interval_seconds: 1000
+  workers: 1
+
+tiktok:
+  # Cookie completo do TikTok. Use F12 -> Network -> Copie a string do `Cookie:` das requests search/general/full/
+  ttwid: "1%7Ccm_fSg1t_LLvkUglmM604-Sad55thoavyobP5EYxxPc%7C1779931418%7C974e44ad69b228362ba50f0b36bd400569dea7808d729f15b86cf9cc67fcaa6b"
+  
+  # URL do sidecar Evil0ctal (Docker local)
+  sidecar_url: "http://sidecar:8080"
+  
+  # Contas TikTok conhecidas para monitorar (Estágio 2)
+  target_accounts: []
+
+meilisearch:
+  host: "http://localhost:7700"
+  key: "masterKey123"
+  index: "artifacts"
+
+redis:
+  address: "redis:6379"
+  password: ""
+  db: 0
+  ttl_hours: 48
+
+nats:
+  url: "nats://nats:4222"
+
+scraper:
+  workers: 2
+  browser_state_dir: "./browser_state_worker"
+
+supabase:
+  url: ""
+  key: ""

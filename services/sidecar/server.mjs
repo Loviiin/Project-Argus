@@ -187,7 +187,7 @@ async function initBrowser() {
           try {
             fs.accessSync(p);
             return p;
-          } catch {}
+          } catch { }
         }
       }
       return undefined; // Let Puppeteer find it
@@ -250,7 +250,7 @@ async function initBrowser() {
           capturedAt: Date.now(),
           referer: request.headers().referer || "",
         });
-      } catch (e) {}
+      } catch (e) { }
     });
 
     // Authenticate with proxy if enabled
@@ -724,7 +724,7 @@ async function _signDirectly(fetchUrl, userAgent = null) {
           counterObj = fromCap;
         }
       }
-    } catch (e) {}
+    } catch (e) { }
 
     const acrawlerInst =
       window.byted_acrawler && typeof window.byted_acrawler === "object"
@@ -831,7 +831,7 @@ async function _signWithFetchInterception(fetchUrl, userAgent = null) {
           if (!request.isInterceptResolutionHandled()) {
             await request.abort("aborted");
           }
-        } catch (e) {}
+        } catch (e) { }
         return;
       }
 
@@ -855,7 +855,7 @@ async function _signWithFetchInterception(fetchUrl, userAgent = null) {
         if (!request.isInterceptResolutionHandled()) {
           await request.abort("aborted");
         }
-      } catch (e) {}
+      } catch (e) { }
     };
 
     try {
@@ -889,7 +889,7 @@ async function _signWithFetchInterception(fetchUrl, userAgent = null) {
             method: "GET",
             credentials: "include",
             headers: { Accept: "*/*" },
-          }).catch(() => {});
+          }).catch(() => { });
         }, fetchUrl)
         .catch((e) => {
           if (!resolved) {
@@ -930,7 +930,7 @@ function parseResult(url, userAgent = null) {
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Content-Type", "application/json");
@@ -999,7 +999,7 @@ async function handleRequest(req, res) {
         try {
           new URL(body.trim());
           targetUrl = body.trim();
-        } catch (e2) {}
+        } catch (e2) { }
       }
 
       if (!targetUrl) {
@@ -1095,7 +1095,7 @@ async function handleRequest(req, res) {
         try {
           new URL(body);
           targetUrl = body;
-        } catch (e2) {}
+        } catch (e2) { }
       }
 
       if (!targetUrl) {
@@ -1138,6 +1138,12 @@ async function handleRequest(req, res) {
 
     // Restart browser
     if (url.pathname === "/restart") {
+      const apiKey = process.env.SIDECAR_API_KEY;
+      if (apiKey && req.headers["x-api-key"] !== apiKey) {
+        res.writeHead(403);
+        res.end(JSON.stringify({ error: "Forbidden" }));
+        return;
+      }
       console.log("[Server] Restarting browser...");
       await closeBrowser();
       await initBrowser();

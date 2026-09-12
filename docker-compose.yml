@@ -93,6 +93,7 @@ services:
       - TZ=America/Sao_Paulo
       - PORT=8080
       - PROXY_ENABLED=false
+      - SIDECAR_API_KEY=${SIDECAR_API_KEY:-}
     deploy:
       resources:
         limits:
@@ -168,6 +169,8 @@ services:
       dockerfile: ./services/parser/Dockerfile
     container_name: argus-parser
     restart: unless-stopped
+    environment:
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-*}
     volumes:
       - ./config:/workspaces/Project-Argus/config
     depends_on:

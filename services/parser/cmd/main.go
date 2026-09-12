@@ -20,12 +20,12 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 
+	"parser/internal/api"
 	"parser/internal/client"
 	"parser/internal/dto"
 	"parser/internal/logic"
 	"parser/internal/repository"
 	"parser/internal/search"
-	"parser/internal/api"
 
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
@@ -37,7 +37,7 @@ func main() {
 	// Inicia Pprof em background
 	go func() {
 		log.Println("Iniciando Pprof do Parser na porta :6060")
-		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
 	}()
 
 	var repo repository.Repository

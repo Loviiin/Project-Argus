@@ -18,12 +18,12 @@ import (
 	"scraper/internal/worker"
 
 	_ "github.com/lib/pq"
-	_ "modernc.org/sqlite"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
 	"github.com/loviiin/project-argus/pkg/tiktok"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -34,7 +34,7 @@ func main() {
 	// Inicia Pprof em background
 	go func() {
 		log.Println("Iniciando Pprof do Scraper na porta :6060")
-		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
 	}()
 
 	// --- NATS ---

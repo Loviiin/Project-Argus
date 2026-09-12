@@ -77,6 +77,25 @@ Quando os scripts avisarem que tudo subiu, a infraestrutura local estará viva.
 
 ---
 
+## 🔒 Segurança e Variáveis de Ambiente
+
+Enquanto o `config.yaml` guarda as configurações da aplicação (tokens do Discord, etc), o Project-Argus utiliza **variáveis de ambiente** para configurações de infraestrutura e segurança.
+
+Para utilizá-las (especialmente no Orange Pi ou qualquer servidor Linux), basta criar um arquivo `.env` na mesma pasta onde está o seu `docker-compose.yml`. O Docker lerá esse arquivo automaticamente.
+
+**Exemplo de `.env`:**
+```env
+# Chave para proteger o endpoint /restart do Sidecar (deixe vazio para não exigir senha)
+SIDECAR_API_KEY=sua_senha_super_secreta_aqui
+
+# Restrição de CORS da API (Protege contra uso indevido do seu dashboard, padrão: *)
+ALLOWED_ORIGIN=http://seu-dominio-ou-ip-do-front-end
+```
+
+Se o arquivo `.env` não existir ou essas variáveis não forem preenchidas, o sistema funcionará normalmente em modo "aberto" (retrocompatível).
+
+---
+
 ## 🍓 Orange Pi / Raspberry Pi (Deploy Lite Automático)
 
 Se você quiser rodar o Argus em uma plaquinha ou VPS modesta via SSH usando as imagens Docker pré-compiladas (ARM64/AMD64) do Github Container Registry:
