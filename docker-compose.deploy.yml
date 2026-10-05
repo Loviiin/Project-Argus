@@ -36,12 +36,14 @@ services:
       - CONFIG_PATH=/app/config.yaml
       - GOMEMLIMIT=50MiB
       - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-*}
+      - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-10}
+      - RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-30}
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./data:/app/data
     ports:
-      - "6060:6060" # Pprof
       - "8082:8080" # Web Dashboard
+      - "8084:8084" # Metrics
     depends_on:
       - nats
       - redis
@@ -56,7 +58,6 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml
     ports:
-      - "6061:6060" # Pprof
       - "8081:8081" # Metrics
     depends_on:
       - nats
@@ -74,7 +75,7 @@ services:
       - ./config.yaml:/app/config.yaml
       - ./data:/app/data
     ports:
-      - "6062:6060" # Pprof
+      - "8086:8084" # Metrics
     depends_on:
       - nats
       - redis
@@ -91,7 +92,7 @@ services:
       - ./config.yaml:/app/config.yaml
       - ./data:/app/data
     ports:
-      - "6063:6060" # Pprof
+      - "8087:8084" # Metrics
     depends_on:
       - nats
       - redis

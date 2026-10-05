@@ -1138,8 +1138,9 @@ async function handleRequest(req, res) {
 
     // Restart browser
     if (url.pathname === "/restart") {
+      // Fail-closed: sem SIDECAR_API_KEY configurada, o endpoint fica desabilitado
       const apiKey = process.env.SIDECAR_API_KEY;
-      if (apiKey && req.headers["x-api-key"] !== apiKey) {
+      if (!apiKey || req.headers["x-api-key"] !== apiKey) {
         res.writeHead(403);
         res.end(JSON.stringify({ error: "Forbidden" }));
         return;

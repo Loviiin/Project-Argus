@@ -1,6 +1,6 @@
 module parser
 
-go 1.25.6
+go 1.26.0
 
 require (
 	github.com/jackc/pgx/v5 v5.8.0
@@ -8,6 +8,7 @@ require (
 	github.com/meilisearch/meilisearch-go v0.36.0
 	github.com/nats-io/nats.go v1.48.0
 	github.com/redis/go-redis/v9 v9.18.0
+	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.50.1
 )
 

@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -31,8 +31,10 @@ func (s *Server) Start(port string) error {
 	fs := http.FileServer(http.Dir("./internal/dashboard"))
 	mux.Handle("/", fs)
 
-	log.Printf("Iniciando Web Dashboard na porta %s", port)
-	return http.ListenAndServe(port, mux)
+	limiter := NewIPRateLimiterFromEnv()
+
+	slog.Info("Iniciando Web Dashboard", "port", port)
+	return http.ListenAndServe(port, limiter.Middleware(mux))
 }
 
 var allowedOrigin = getEnv("ALLOWED_ORIGIN", "*")
@@ -61,7 +63,8 @@ func setCORS(w http.ResponseWriter) {
 
 func parseIntWithBounds(r *http.Request, key string, fallback, maxVal int) int {
 	val, err := strconv.Atoi(r.URL.Query().Get(key))
-	if err != nil || val < 0 {
+	// val == 0 também cai no fallback: limit=0 causaria divisão por zero no cálculo de páginas
+	if err != nil || val <= 0 {
 		val = fallback
 	}
 	if maxVal > 0 && val > maxVal {
@@ -152,7 +155,7 @@ func (s *Server) handleGetArtifacts(w http.ResponseWriter, r *http.Request) {
 		var mentionsCount int
 
 		if err := rows.Scan(&id, &sourceUrl, &authorId, &inviteCode, &serverName, &memberCount, &icon, &status, &processedAt, &rawOcr, &avatarUrl, &mentionsCount); err != nil {
-			log.Println("Erro lendo row de artifacts:", err)
+			slog.Error("Erro lendo row de artifacts", "error", err)
 			continue
 		}
 
@@ -213,7 +216,7 @@ func (s *Server) handleGetComments(w http.ResponseWriter, r *http.Request) {
 		var avatarUrl, replyId, uniqueId sql.NullString
 
 		if err := rows.Scan(&cid, &awemeId, &text, &diggCount, &nickname, &uniqueId, &avatarUrl, &createdAt, &replyId); err != nil {
-			log.Println("Erro lendo row de comments:", err)
+			slog.Error("Erro lendo row de comments", "error", err)
 			continue
 		}
 
@@ -294,7 +297,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		var avatarUrl sql.NullString
 
 		if err := rows.Scan(&id, &sourceUrl, &inviteCode, &authorId, &serverName, &serverId, &memberCount, &icon, &status, &processedAt, &avatarUrl); err != nil {
-			log.Println("Erro lendo row de search:", err)
+			slog.Error("Erro lendo row de search", "error", err)
 			continue
 		}
 
