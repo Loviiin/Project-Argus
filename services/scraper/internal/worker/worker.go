@@ -185,7 +185,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) (int, error
 		lowerText := strings.ToLower(c.Text)
 		if strings.Contains(lowerText, "discord") || strings.Contains(lowerText, "gg/") {
 			ocrMsg := map[string]interface{}{
-				"source_path":       fmt.Sprintf("https://www.tiktok.com/@%s/video/%s#comment-%s", c.User.Nickname, job.VideoID, c.Cid),
+				"source_path":       fmt.Sprintf("https://www.tiktok.com/@%s/video/%s#comment-%s", c.User.UniqueId, job.VideoID, c.Cid),
 				"text_content":      c.Text,
 				"author_id":         c.User.Nickname,
 				"is_reply":          job.CommentID != "",

@@ -37,12 +37,12 @@ func (s *SupabaseClient) SendArtifact(inviteCode, serverName, sourceUrl, rawOcr,
 	}
 
 	body, _ := json.Marshal(payload)
-	
+
 	req, err := http.NewRequest("POST", fmt.Sprintf("%s/rest/v1/artifacts", s.URL), bytes.NewBuffer(body))
 	if err != nil {
 		return err
 	}
-	
+
 	req.Header.Set("apikey", s.Key)
 	req.Header.Set("Authorization", "Bearer "+s.Key)
 	req.Header.Set("Content-Type", "application/json")

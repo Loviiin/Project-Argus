@@ -21,8 +21,11 @@
 
 body {
     background-color: var(--bg-color);
-    background-image: radial-gradient(circle at 15% 50%, rgba(88, 101, 242, 0.08), transparent 25%),
-                      radial-gradient(circle at 85% 30%, rgba(234, 51, 92, 0.05), transparent 25%);
+    background-image: 
+        radial-gradient(circle at 10% 20%, rgba(88, 101, 242, 0.15) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(234, 51, 92, 0.1) 0%, transparent 40%),
+        radial-gradient(circle at 50% 50%, rgba(46, 204, 113, 0.05) 0%, transparent 50%);
+    background-attachment: fixed;
     color: var(--text-main);
     min-height: 100vh;
     overflow-x: hidden;
@@ -44,13 +47,21 @@ header {
 
 .logo {
     font-size: 1.5rem;
-    font-weight: 700;
-    background: linear-gradient(90deg, #5865F2, #EA335C);
+    font-weight: 800;
+    background: linear-gradient(90deg, #5865F2, #EA335C, #5865F2);
+    background-size: 200% auto;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    animation: shine 3s linear infinite;
+}
+
+@keyframes shine {
+    to {
+        background-position: 200% center;
+    }
 }
 
 .tabs {
@@ -120,16 +131,32 @@ main {
     border: 1px solid var(--border);
     border-radius: 16px;
     padding: 1.5rem;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.3s ease, border-color 0.3s ease;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, rgba(88, 101, 242, 0.5), transparent);
+    opacity: 0;
+    transition: opacity 0.3s ease;
 }
 
 .card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-    border-color: rgba(255,255,255,0.15);
+    transform: translateY(-6px);
+    box-shadow: 0 12px 32px rgba(0,0,0,0.4), 0 0 15px rgba(88, 101, 242, 0.15);
+    border-color: rgba(88, 101, 242, 0.3);
+}
+
+.card:hover::before {
+    opacity: 1;
 }
 
 /* Artifact Card Specifics */
@@ -332,6 +359,12 @@ main {
     color: white;
     width: 100%;
     outline: none;
+    font-size: 1rem;
+}
+
+.search-bar:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.2);
 }
 
 .page-selector {
@@ -386,12 +419,22 @@ main {
 }
 
 .filter-bar select, .filter-bar input {
-    background: rgba(0,0,0,0.2);
+    background: rgba(0,0,0,0.3);
     color: white;
-    border: 1px solid rgba(255,255,255,0.1);
-    padding: 5px 10px;
-    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.15);
+    padding: 8px 12px;
+    border-radius: 8px;
     outline: none;
+    transition: all 0.2s;
+}
+
+.filter-bar select:focus, .filter-bar input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.2);
+}
+
+.filter-bar select option {
+    background: var(--bg-color);
 }
 
 .member-filter {

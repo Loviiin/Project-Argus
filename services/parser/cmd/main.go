@@ -421,6 +421,12 @@ func main() {
 			return
 		}
 
+		// Auto tag
+		tags := logic.AutoTag(inviteInfo.Guild.Name, "")
+		if tags != "" {
+			_ = repo.UpdateTags(context.Background(), job.InviteCode, tags)
+		}
+
 		dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
 		rdb.Incr(context.Background(), "argus:metrics:parser:processed")
 		msg.Ack()

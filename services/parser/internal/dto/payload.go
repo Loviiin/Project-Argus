@@ -1,9 +1,9 @@
 package dto
 
 type OcrMessage struct {
-	SourcePath  string                 `json:"source_path"`
-	TextContent string                 `json:"text_content"`
-	AuthorID    string                 `json:"author_id,omitempty"`
+	SourcePath      string                 `json:"source_path"`
+	TextContent     string                 `json:"text_content"`
+	AuthorID        string                 `json:"author_id,omitempty"`
 	SourceType      string                 `json:"source_type,omitempty"`
 	IsReply         bool                   `json:"is_reply,omitempty"`
 	ParentCommentID string                 `json:"parent_comment_id,omitempty"`

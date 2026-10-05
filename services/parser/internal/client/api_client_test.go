@@ -15,11 +15,11 @@ func TestNewHTTPDiscordClient(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		proxyURL     string
-		wantProxy    bool
-		wantTimeout  time.Duration
-		wantNilHTTP  bool
+		name        string
+		proxyURL    string
+		wantProxy   bool
+		wantTimeout time.Duration
+		wantNilHTTP bool
 	}{
 		{
 			name:        "without proxy",
@@ -104,10 +104,10 @@ func TestDiscordInviteResponse_JSONDeserialization(t *testing.T) {
 	expiresAt := "2026-06-01T00:00:00+00:00"
 
 	tests := []struct {
-		name       string
-		payload    string
-		wantErr    bool
-		validate   func(t *testing.T, r *DiscordInviteResponse)
+		name     string
+		payload  string
+		wantErr  bool
+		validate func(t *testing.T, r *DiscordInviteResponse)
 	}{
 		{
 			name: "full payload with all fields",

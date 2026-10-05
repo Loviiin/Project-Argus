@@ -21,10 +21,9 @@
             <button class="tab-btn" onclick="switchTab('comments')">
                 <i class="fa-brands fa-tiktok"></i> Comentários
             </button>
-            <!-- Link para o SQLite Web que o usuário aprovou -->
-            <a href="http://db.seu-dominio.com" target="_blank" class="tab-btn" style="text-decoration: none;">
-                <i class="fa-solid fa-database"></i> SQLite Web
-            </a>
+            <button class="tab-btn" onclick="switchTab('stats')">
+                <i class="fa-solid fa-chart-line"></i> Status & Métricas
+            </button>
         </div>
     </header>
 
@@ -54,6 +53,30 @@
                             <option value="RATE_LIMITED">Apenas Bloqueados (Rate Limit)</option>
                         </select>
                     </div>
+                    <div>
+                        <label>Ordenar Por:</label>
+                        <select id="sort-by-filter" onchange="const q = document.getElementById('search-input') ? document.getElementById('search-input').value.trim() : ''; if(q.length >= 2) { searchArtifacts(q, 1); } else { loadArtifacts(1); }">
+                            <option value="date">Data</option>
+                            <option value="members">Membros</option>
+                            <option value="name">Nome</option>
+                            <option value="status">Status</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Tag:</label>
+                        <input type="text" id="tag-filter" placeholder="Ex: gaming" style="width: 100px; padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white;" onchange="const q = document.getElementById('search-input') ? document.getElementById('search-input').value.trim() : ''; if(q.length >= 2) { searchArtifacts(q, 1); } else { loadArtifacts(1); }">
+                    </div>
+                    <div>
+                        <label>Ordem:</label>
+                        <select id="sort-filter" onchange="const q = document.getElementById('search-input') ? document.getElementById('search-input').value.trim() : ''; if(q.length >= 2) { searchArtifacts(q, 1); } else { loadArtifacts(1); }">
+                            <option value="desc">Descrescente</option>
+                            <option value="asc">Ascendente</option>
+                        </select>
+                    </div>
+                    <div>
+                        <button onclick="exportData('csv')" class="btn btn-secondary"><i class="fa-solid fa-file-csv"></i> CSV</button>
+                        <button onclick="exportData('json')" class="btn btn-secondary"><i class="fa-solid fa-file-code"></i> JSON</button>
+                    </div>
                 </div>
             </div>
 
@@ -70,6 +93,27 @@
                 <div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando comentários...</div>
             </div>
             <div class="pagination page-selector" id="comments-pagination">
+            </div>
+        </div>
+
+        <!-- Stats Page -->
+        <div id="stats" class="page">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;" id="stats-summary">
+                <div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando métricas...</div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div>
+                    <h2><i class="fa-solid fa-trophy"></i> Top Contributors</h2>
+                    <div class="grid" id="top-contributors-list" style="display: flex; flex-direction: column; gap: 1rem;">
+                        <div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando...</div>
+                    </div>
+                </div>
+                <div>
+                    <h2><i class="fa-solid fa-tags"></i> Top Tags</h2>
+                    <div class="grid" id="top-tags-list" style="display: flex; flex-direction: column; gap: 1rem;">
+                        <div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando...</div>
+                    </div>
+                </div>
             </div>
         </div>
     </main>

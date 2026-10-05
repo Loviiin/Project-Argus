@@ -26,6 +26,12 @@ func (s *Server) Start(port string) error {
 	mux.HandleFunc("/api/artifacts", s.handleGetArtifacts)
 	mux.HandleFunc("/api/comments", s.handleGetComments)
 	mux.HandleFunc("/api/search", s.handleSearch)
+	mux.HandleFunc("/api/export", s.handleExport)
+	mux.HandleFunc("/api/stats/top-contributors", s.handleGetTopContributors)
+	mux.HandleFunc("/api/stats", s.handleGetStats)
+	// Como mux padrão do Go 1.22 aceita métodos, podemos fazer:
+	// Mas como pode ser 1.21, vamos usar HandleFunc e tratar método dentro
+	mux.HandleFunc("/api/artifacts/", s.handleUpdateTags)
 
 	// Arquivos estáticos (Dashboard)
 	fs := http.FileServer(http.Dir("./internal/dashboard"))
@@ -85,6 +91,7 @@ func (s *Server) handleGetArtifacts(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
 	minMembers := parseIntWithBounds(r, "min_members", 0, 0)
 	maxMembers := parseIntWithBounds(r, "max_members", 0, 0)
+	tagFilter := r.URL.Query().Get("tag")
 
 	conditions := []string{}
 	args := []interface{}{}
@@ -97,6 +104,11 @@ func (s *Server) handleGetArtifacts(w http.ResponseWriter, r *http.Request) {
 		conditions = append(conditions, "UPPER(a.discord_status) IN ('EXPIRED', 'INVALID')")
 	} else if statusFilter == "RATE_LIMITED" {
 		conditions = append(conditions, "UPPER(a.discord_status) = 'RATE_LIMITED'")
+	}
+
+	if tagFilter != "" {
+		conditions = append(conditions, "a.tags LIKE ?")
+		args = append(args, "%"+tagFilter+"%")
 	}
 
 	if minMembers > 0 {
@@ -117,19 +129,36 @@ func (s *Server) handleGetArtifacts(w http.ResponseWriter, r *http.Request) {
 	countQuery := fmt.Sprintf("SELECT COUNT(DISTINCT CASE WHEN a.discord_server_id = '' OR a.discord_server_id IS NULL THEN a.discord_invite_code ELSE a.discord_server_id END) FROM artifacts a %s", whereClause)
 	s.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount)
 
+	sortOrder := r.URL.Query().Get("sort")
+	sortBy := r.URL.Query().Get("sort_by")
+	
+	orderField := "MAX(a.processed_at)"
+	if sortBy == "members" {
+		orderField = "MAX(a.discord_member_count)"
+	} else if sortBy == "name" {
+		orderField = "MAX(a.discord_server_name)"
+	} else if sortBy == "status" {
+		orderField = "MAX(a.discord_status)"
+	}
+	
+	orderClause := "ORDER BY " + orderField + " DESC"
+	if sortOrder == "asc" {
+		orderClause = "ORDER BY " + orderField + " ASC"
+	}
+
 	query := fmt.Sprintf(`
 		SELECT 
 			MAX(a.id), MAX(a.source_url), MAX(a.author_id), GROUP_CONCAT(DISTINCT a.discord_invite_code), 
 			MAX(a.discord_server_name), MAX(a.discord_member_count), MAX(a.discord_icon), 
 			MAX(a.discord_status), MAX(a.processed_at), MAX(a.raw_ocr_text),
 			MAX((SELECT avatar_url FROM comments c WHERE c.nickname = a.author_id LIMIT 1)) as avatar_url,
-			COUNT(*) as mentions_count
+			COUNT(*) as mentions_count, MAX(a.tags) as tags
 		FROM artifacts a
 		%s
 		GROUP BY CASE WHEN a.discord_server_id = '' OR a.discord_server_id IS NULL THEN a.discord_invite_code ELSE a.discord_server_id END
-		ORDER BY MAX(a.processed_at) DESC
+		%s
 		LIMIT ? OFFSET ?
-	`, whereClause)
+	`, whereClause, orderClause)
 
 	args = append(args, limit, offset)
 	rows, err := s.db.Query(query, args...)
@@ -148,13 +177,13 @@ func (s *Server) handleGetArtifacts(w http.ResponseWriter, r *http.Request) {
 		var id int
 		var sourceUrl, authorId, inviteCode, processedAt string
 		var rawOcr sql.NullString
-		var serverName, icon, status sql.NullString
+		var serverName, icon, status, tags sql.NullString
 		var memberCount sql.NullInt64
 		var avatarUrl sql.NullString
 
 		var mentionsCount int
 
-		if err := rows.Scan(&id, &sourceUrl, &authorId, &inviteCode, &serverName, &memberCount, &icon, &status, &processedAt, &rawOcr, &avatarUrl, &mentionsCount); err != nil {
+		if err := rows.Scan(&id, &sourceUrl, &authorId, &inviteCode, &serverName, &memberCount, &icon, &status, &processedAt, &rawOcr, &avatarUrl, &mentionsCount, &tags); err != nil {
 			slog.Error("Erro lendo row de artifacts", "error", err)
 			continue
 		}
@@ -172,10 +201,23 @@ func (s *Server) handleGetArtifacts(w http.ResponseWriter, r *http.Request) {
 			"processed_at":         processedAt,
 			"raw_ocr_text":         rawOcr.String,
 			"mentions_count":       mentionsCount,
+			"tags":                 tags.String,
 		})
 	}
 
-	json.NewEncoder(w).Encode(results)
+	page := (offset / limit) + 1
+	totalPages := (totalCount + limit - 1) / limit
+	if totalPages == 0 {
+		totalPages = 1
+	}
+
+	json.NewEncoder(w).Encode(PaginatedResponse{
+		Items:      results,
+		TotalCount: totalCount,
+		Page:       page,
+		Limit:      limit,
+		TotalPages: totalPages,
+	})
 }
 
 func (s *Server) handleGetComments(w http.ResponseWriter, r *http.Request) {
@@ -260,24 +302,91 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing query", http.StatusBadRequest)
 		return
 	}
+
+	// Remover aspas para evitar erro de sintaxe no parser do FTS5 (malformed MATCH expression)
+	cleanQuery := strings.ReplaceAll(query, "\"", "")
+	cleanQuery = strings.ReplaceAll(cleanQuery, "'", "")
+
+	// Converter "Fla" para '"Fla"*' para permitir busca por prefixo no FTS5
+	words := strings.Fields(cleanQuery)
+	for i, word := range words {
+		words[i] = `"` + word + `"*`
+	}
+	ftsQuery := strings.Join(words, " AND ")
+
 	limit := parseIntWithBounds(r, "limit", 50, 200)
 	offset := parseIntWithBounds(r, "offset", 0, 0)
+	statusFilter := r.URL.Query().Get("status")
+	minMembers := parseIntWithBounds(r, "min_members", 0, 0)
+	maxMembers := parseIntWithBounds(r, "max_members", 0, 0)
+	tagFilter := r.URL.Query().Get("tag")
+
+	conditions := []string{"artifacts_fts MATCH ?"}
+	args := []interface{}{ftsQuery}
+
+	if statusFilter == "VALID" {
+		conditions = append(conditions, "UPPER(a.discord_status) = 'ACTIVE'")
+	} else if statusFilter == "PENDING" {
+		conditions = append(conditions, "UPPER(a.discord_status) = 'PENDING'")
+	} else if statusFilter == "EXPIRED" {
+		conditions = append(conditions, "UPPER(a.discord_status) IN ('EXPIRED', 'INVALID')")
+	} else if statusFilter == "RATE_LIMITED" {
+		conditions = append(conditions, "UPPER(a.discord_status) = 'RATE_LIMITED'")
+	}
+
+	if tagFilter != "" {
+		conditions = append(conditions, "a.tags LIKE ?")
+		args = append(args, "%"+tagFilter+"%")
+	}
+
+	if minMembers > 0 {
+		conditions = append(conditions, "a.discord_member_count >= ?")
+		args = append(args, minMembers)
+	}
+	if maxMembers > 0 {
+		conditions = append(conditions, "a.discord_member_count <= ?")
+		args = append(args, maxMembers)
+	}
+
+	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 
 	var totalCount int
-	s.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM artifacts_fts WHERE artifacts_fts MATCH ?", query).Scan(&totalCount)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM artifacts a JOIN artifacts_fts fts ON a.id = fts.rowid %s", whereClause)
+	s.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount)
 
-	rows, err := s.db.QueryContext(r.Context(), `
+	sortOrder := r.URL.Query().Get("sort")
+	sortBy := r.URL.Query().Get("sort_by")
+	
+	orderField := "a.processed_at"
+	if sortBy == "members" {
+		orderField = "a.discord_member_count"
+	} else if sortBy == "name" {
+		orderField = "a.discord_server_name"
+	} else if sortBy == "status" {
+		orderField = "a.discord_status"
+	}
+	
+	orderClause := "ORDER BY " + orderField + " DESC" // default to recency for search too
+	if sortOrder == "asc" {
+		orderClause = "ORDER BY " + orderField + " ASC"
+	}
+
+	queryStr := fmt.Sprintf(`
 		SELECT a.id, a.source_url, a.discord_invite_code, a.author_id,
 			   a.discord_server_name, a.discord_server_id,
 			   a.discord_member_count, a.discord_icon,
 			   a.discord_status, a.processed_at,
-			   (SELECT avatar_url FROM comments c WHERE c.nickname = a.author_id LIMIT 1) as avatar_url
+			   (SELECT avatar_url FROM comments c WHERE c.nickname = a.author_id LIMIT 1) as avatar_url,
+			   a.tags
 		FROM artifacts a
 		JOIN artifacts_fts fts ON a.id = fts.rowid
-		WHERE artifacts_fts MATCH ?
-		ORDER BY rank
+		%s
+		%s
 		LIMIT ? OFFSET ?
-	`, query, limit, offset)
+	`, whereClause, orderClause)
+
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(r.Context(), queryStr, args...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -292,11 +401,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id int
 		var sourceUrl, inviteCode, processedAt string
-		var authorId, serverName, serverId, icon, status sql.NullString
+		var authorId, serverName, serverId, icon, status, tags sql.NullString
 		var memberCount sql.NullInt64
 		var avatarUrl sql.NullString
 
-		if err := rows.Scan(&id, &sourceUrl, &inviteCode, &authorId, &serverName, &serverId, &memberCount, &icon, &status, &processedAt, &avatarUrl); err != nil {
+		if err := rows.Scan(&id, &sourceUrl, &inviteCode, &authorId, &serverName, &serverId, &memberCount, &icon, &status, &processedAt, &avatarUrl, &tags); err != nil {
 			slog.Error("Erro lendo row de search", "error", err)
 			continue
 		}
@@ -313,6 +422,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			"discord_icon":         icon.String,
 			"discord_status":       status.String,
 			"processed_at":         processedAt,
+			"tags":                 tags.String,
 		})
 	}
 
@@ -329,4 +439,24 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Limit:      limit,
 		TotalPages: totalPages,
 	})
+}
+
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+	s.handleExportImpl(w, r)
+}
+
+func (s *Server) handleGetTopContributors(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+	s.handleGetTopContributorsImpl(w, r)
+}
+
+func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+	s.handleGetStatsImpl(w, r)
+}
+
+func (s *Server) handleUpdateTags(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+	s.handleUpdateTagsImpl(w, r)
 }

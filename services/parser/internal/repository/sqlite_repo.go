@@ -15,7 +15,7 @@ type SQLiteRepository struct {
 
 func NewSQLiteRepository(path string) (*SQLiteRepository, error) {
 	dbPath := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)"
-	
+
 	dbWrite, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao abrir sqlite write: %w", err)
@@ -98,13 +98,19 @@ func (r *SQLiteRepository) runMigrations(ctx context.Context) error {
 		reply_id TEXT
 	);
 
-	-- Adicionar colunas caso a tabela já exista
-	ALTER TABLE comments ADD COLUMN unique_id TEXT;
-	ALTER TABLE comments ADD COLUMN avatar_url TEXT;
 	`
-	// Ignoramos o erro do ALTER TABLE pois se as colunas já existirem ele falha graciosamente
-	r.dbWrite.ExecContext(ctx, query)
+	// Tabela principal e triggers
+	if _, err := r.dbWrite.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("falha criar schemas iniciais: %w", err)
+	}
+
+	// Executamos ALTER TABLE separadamente para que, se um falhar (coluna já existe), o outro execute.
+	r.dbWrite.ExecContext(ctx, "ALTER TABLE comments ADD COLUMN unique_id TEXT;")
+	r.dbWrite.ExecContext(ctx, "ALTER TABLE comments ADD COLUMN avatar_url TEXT;")
 	
+	// Adicionar tags (Versão 5)
+	r.dbWrite.ExecContext(ctx, "ALTER TABLE artifacts ADD COLUMN tags TEXT DEFAULT '';")
+
 	// Adicionar índices para otimizar queries
 	r.dbWrite.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_comments_nickname ON comments(nickname);")
 	return nil
@@ -161,6 +167,17 @@ func (r *SQLiteRepository) UpdateStatus(ctx context.Context, inviteCode, status 
 		WHERE discord_invite_code = ?
 	`
 	_, err := r.dbWrite.ExecContext(ctx, query, status, inviteCode)
+	return err
+}
+
+func (r *SQLiteRepository) UpdateTags(ctx context.Context, inviteCode, tags string) error {
+	query := `
+		UPDATE artifacts 
+		SET tags = ?,
+		    processed_at = CURRENT_TIMESTAMP
+		WHERE discord_invite_code = ?
+	`
+	_, err := r.dbWrite.ExecContext(ctx, query, tags, inviteCode)
 	return err
 }
 
