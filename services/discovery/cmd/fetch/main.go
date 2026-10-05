@@ -11,12 +11,13 @@ import (
 )
 
 func main() {
-	sidecar := flag.String("sidecar", "http://localhost:8000", "sidecar url")
+	sidecar := flag.String("sidecar", "http://localhost:8085", "sidecar url")
 	ttwid := flag.String("ttwid", "", "ttwid cookie (optional)")
 	hashtag := flag.String("hashtag", "discord", "hashtag to search (without #)")
 	flag.Parse()
 
-	src := sources.NewTikTokHTTPSource(*sidecar, *ttwid, nil)
+	// dedup nil: CLI de debug não depende de Redis e mostra todos os resultados
+	src := sources.NewTikTokSignatureSearch(*sidecar, *ttwid, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

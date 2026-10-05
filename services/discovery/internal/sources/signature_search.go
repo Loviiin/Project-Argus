@@ -40,6 +40,14 @@ func (s *TikTokSignatureSearch) Close() error {
 	return nil
 }
 
+// alreadyProcessed consulta o dedup; com dedup nil (ex.: CLI de debug sem Redis) nada é filtrado.
+func (s *TikTokSignatureSearch) alreadyProcessed(ctx context.Context, videoID string) (bool, error) {
+	if s.dedup == nil {
+		return false, nil
+	}
+	return s.dedup.CheckIfProcessed(ctx, "processed_job", videoID)
+}
+
 type searchResponse struct {
 	ItemList []struct {
 		Item struct {
@@ -73,7 +81,7 @@ func (s *TikTokSignatureSearch) Fetch(ctx context.Context, query string) ([]Disc
 		if videoID == "" {
 			return nil, nil
 		}
-		isProcessed, _ := s.dedup.CheckIfProcessed(ctx, "processed_job", videoID)
+		isProcessed, _ := s.alreadyProcessed(ctx, videoID)
 		if isProcessed {
 			log.Printf("[Discovery] skip (já visto): %s", videoID)
 			return nil, nil
@@ -201,7 +209,7 @@ func (s *TikTokSignatureSearch) Fetch(ctx context.Context, query string) ([]Disc
 				continue
 			}
 
-			isProcessed, err := s.dedup.CheckIfProcessed(ctx, "processed_job", videoID)
+			isProcessed, err := s.alreadyProcessed(ctx, videoID)
 			if err != nil {
 				log.Printf("[Discovery] erro redis para %s: %v\n", videoID, err)
 				continue
