@@ -1,8 +1,7 @@
 package main
 
 import (
-	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -21,31 +20,41 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
 	cfg := config.LoadConfig()
 
-	fmt.Println("Argus Discovery Service (Publisher) iniciando...")
+	slog.Info("Argus Discovery Service (Publisher) iniciando...")
 
 	// Inicia Pprof em background
 	go func() {
-		log.Println("Iniciando Pprof do Discovery na porta :6060")
-		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
+		slog.Info("Iniciando Pprof do Discovery", "porta", ":6060")
+		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			slog.Error("Pprof server falhou", "error", err)
+		}
 	}()
 
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {
-		log.Fatal("Erro NATS:", err)
+		slog.Error("Erro NATS", "error", err)
+		os.Exit(1)
 	}
 	js, err := nc.JetStream()
 	if err != nil {
-		log.Fatal("Erro JetStream:", err)
+		slog.Error("Erro JetStream", "error", err)
+		os.Exit(1)
 	}
 	defer nc.Close()
 
 	// Garante que o stream argus-scraper existe
 	if err := service.EnsureStream(js); err != nil {
-		log.Fatal("Erro criando stream argus-scraper:", err)
+		slog.Error("Erro criando stream argus-scraper", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Stream argus-scraper (jobs.scrape) pronto")
+	slog.Info("Stream argus-scraper (jobs.scrape) pronto")
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.Redis.Address,
@@ -64,7 +73,7 @@ func main() {
 	}
 
 	// Estágio 1: Broad Discovery — busca por hashtag usando a API via Sidecar
-	log.Printf("Inicializando Stage 1 (Hashtag Discovery via Sidecar API)")
+	slog.Info("Inicializando Stage 1 (Hashtag Discovery via Sidecar API)")
 	stage1 := sources.NewTikTokSignatureSearch(sidecarURL, cfg.TikTok.Ttwid, dedupSv)
 
 	svc := service.NewDiscoveryService(js, rdb, []sources.Source{stage1}, cfg.Discovery.Workers)
@@ -77,7 +86,7 @@ func main() {
 	defer ticker.Stop()
 
 	cycle := func() {
-		fmt.Println("\n--- Iniciando ciclo de discovery ---")
+		slog.Info("--- Iniciando ciclo de discovery ---")
 		svc.Run(cfg.Discovery.Hashtags)
 	}
 
@@ -93,14 +102,14 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	fmt.Println("Discovery Service (Publisher) rodando! Publicando em jobs.scrape...")
+	slog.Info("Discovery Service (Publisher) rodando! Publicando em jobs.scrape...")
 
 	for {
 		select {
 		case <-ticker.C:
 			cycle()
 		case <-sig:
-			fmt.Println("\nEncerrando Discovery Service...")
+			slog.Info("Encerrando Discovery Service...")
 			svc.Close()
 			return
 		}

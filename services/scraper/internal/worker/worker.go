@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -52,8 +52,8 @@ func (p *Processor) Close() {
 	}
 }
 
-func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
-	log.Printf("[Worker] 🚀 Iniciando extração do vídeo %s (Cursor: %d) via Sidecar", job.VideoID, job.Cursor)
+func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) (int, error) {
+	slog.Info("🚀 Iniciando extração via Sidecar", "video_id", job.VideoID, "cursor", job.Cursor)
 
 	if job.Count == 0 {
 		job.Count = 20
@@ -71,7 +71,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 	// 1. Obter a assinatura via Sidecar
 	signResp, err := p.signer.SignURL(ctx, apiURL, "")
 	if err != nil {
-		return fmt.Errorf("falha na assinatura (Sidecar): %w", err)
+		return 0, fmt.Errorf("falha na assinatura (Sidecar): %w", err)
 	}
 
 	cookieStr := signResp.Data.Cookies
@@ -95,23 +95,23 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		Get(signResp.Data.SignedURL)
 
 	if err != nil {
-		return fmt.Errorf("falha na requisição direta: %w", err)
+		return 0, fmt.Errorf("falha na requisição direta: %w", err)
 	}
 
 	bodyBytes := resp.Bytes()
 
 	// Tratamento de Rate Limit ou Shadowban com Fallback
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden || len(bodyBytes) == 0 {
-		log.Printf("[Worker] 🚨 Rate limit ou Shadowban (Status: %d). Tentando fallback /fetch...", resp.StatusCode)
+		slog.Warn("🚨 Rate limit ou Shadowban. Tentando fallback /fetch...", "status", resp.StatusCode)
 		
 		fallbackBytes, fetchErr := p.signer.FetchURL(ctx, apiURL, p.Config.TikTok.Ttwid)
 		if fetchErr != nil {
-			return fmt.Errorf("HTTP %d e falha no fallback /fetch: %w", resp.StatusCode, fetchErr)
+			return 0, fmt.Errorf("HTTP %d e falha no fallback /fetch: %w", resp.StatusCode, fetchErr)
 		}
 		bodyBytes = fallbackBytes
-		log.Printf("[Worker] ✅ Fallback /fetch bem-sucedido para vídeo %s", job.VideoID)
+		slog.Info("✅ Fallback /fetch bem-sucedido", "video_id", job.VideoID)
 	} else if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status HTTP inesperado: %d", resp.StatusCode)
+		return 0, fmt.Errorf("status HTTP inesperado: %d", resp.StatusCode)
 	}
 
 	// 6. Decodificar JSON
@@ -136,8 +136,8 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 	}
 
 	if err := json.Unmarshal(bodyBytes, &tiktokResp); err != nil {
-		log.Printf("[Worker] 🚨 Não foi possível decodificar JSON. Body: %s", string(bodyBytes))
-		return fmt.Errorf("falha ao parsear JSON: %w", err)
+		slog.Error("🚨 Não foi possível decodificar JSON", "error", err)
+		return 0, fmt.Errorf("falha ao parsear JSON: %w", err)
 	}
 
 	if len(tiktokResp.Comments) == 0 {
@@ -145,7 +145,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		if len(bodyBytes) < 500 {
 			limit = len(bodyBytes)
 		}
-		log.Printf("[Worker] ⚠️ O JSON não contém comentários! Raw: %s", string(bodyBytes[:limit]))
+		slog.Warn("⚠️ O JSON não contém comentários!", "limit", limit)
 	}
 
 	// 7. Inserção no PostgreSQL com UPSERT
@@ -176,7 +176,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		_, err := p.db.ExecContext(ctx, query,
 			c.Cid, job.VideoID, replyID, c.Text, c.DiggCount, c.ReplyCommentTotal, c.User.Uid, c.User.Nickname, c.User.UniqueId, avatarURL, createdAt, now)
 		if err != nil {
-			log.Printf("[Worker] ⚠️ Erro ao inserir comentário %s: %v", c.Cid, err)
+			slog.Warn("⚠️ Erro ao inserir comentário", "cid", c.Cid, "error", err)
 		} else {
 			insertedCount++
 		}
@@ -193,7 +193,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 			}
 			data, _ := json.Marshal(ocrMsg)
 			if _, pubErr := p.js.Publish("data.text_extracted", data); pubErr != nil {
-				log.Printf("[Worker] ⚠️ Erro ao publicar comentário no NATS para o parser: %v", pubErr)
+				slog.Warn("⚠️ Erro ao publicar comentário no NATS para o parser", "error", pubErr)
 			}
 		}
 
@@ -204,30 +204,30 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 			replyJob.Cursor = 0
 			replyData, _ := json.Marshal(replyJob)
 			if _, err := p.js.Publish("jobs.scrape.reply", replyData); err != nil {
-				log.Printf("[Worker] ⚠️ Erro ao publicar job de resposta para %s: %v", c.Cid, err)
+				slog.Warn("⚠️ Erro ao publicar job de resposta", "cid", c.Cid, "error", err)
 			} else {
-				log.Printf("[Worker] 📨 Enfileirada varredura de respostas para comentário %s (%d respostas)", c.Cid, c.ReplyCommentTotal)
+				slog.Info("📨 Enfileirada varredura de respostas", "cid", c.Cid, "respostas", c.ReplyCommentTotal)
 			}
 		}
 	}
 
-	log.Printf("[Worker] ✅ Inseridos/Atualizados %d comentários (Vídeo: %s)", insertedCount, job.VideoID)
+	slog.Info("✅ Inseridos/Atualizados comentários", "count", insertedCount, "video_id", job.VideoID)
 
 	// 8. Paginação
 	if tiktokResp.HasMore == 1 {
 		// Proteção contra Reply Bombs: se for uma thread de resposta, só paginamos até o cursor 60 (aprox. 3 páginas / 60 respostas)
 		if job.CommentID != "" && tiktokResp.Cursor > 60 {
-			log.Printf("[Worker] 🛑 Limite de profundidade atingido na thread de respostas do comentário %s", job.CommentID)
-			return nil
+			slog.Warn("🛑 Limite de profundidade atingido na thread de respostas", "comment_id", job.CommentID)
+			return insertedCount, nil
 		}
 
 		// Proteção contra Flood de Top-Level: limite de cursor para comentários raiz (ex: 1000 = 50 páginas)
 		if job.CommentID == "" && tiktokResp.Cursor > 1000 {
-			log.Printf("[Worker] 🛑 Limite de profundidade atingido para a camada raiz do vídeo %s (Cursor %d)", job.VideoID, tiktokResp.Cursor)
-			return nil
+			slog.Warn("🛑 Limite de profundidade atingido para a camada raiz", "video_id", job.VideoID, "cursor", tiktokResp.Cursor)
+			return insertedCount, nil
 		}
 
-		log.Printf("[Worker] ⏭️ Vídeo %s possui mais páginas. Publicando Cursor %d no NATS...", job.VideoID, tiktokResp.Cursor)
+		slog.Info("⏭️ Vídeo possui mais páginas. Publicando próximo cursor...", "video_id", job.VideoID, "next_cursor", tiktokResp.Cursor)
 		
 		nextJob := job
 		nextJob.Cursor = tiktokResp.Cursor
@@ -240,11 +240,11 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) error {
 		jobData, _ := json.Marshal(nextJob)
 		_, err := p.js.Publish(targetSubject, jobData)
 		if err != nil {
-			return fmt.Errorf("falha ao publicar próxima página no NATS: %w", err)
+			return insertedCount, fmt.Errorf("falha ao publicar próxima página no NATS: %w", err)
 		}
 	}
 
-	return nil
+	return insertedCount, nil
 }
 
 // RandomDelay aplica um delay aleatório entre min e max segundos.

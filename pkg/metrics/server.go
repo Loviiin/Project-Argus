@@ -3,8 +3,9 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -27,7 +28,7 @@ func StartMetricsServer(port string, rdb *redis.Client, metricsDefs []MetricDef)
 			if err == redis.Nil {
 				val = "0"
 			} else if err != nil {
-				log.Printf("metrics: erro ao ler chave %s: %v", m.RedisKey, err)
+				slog.Error("erro ao ler chave", "redis_key", m.RedisKey, "error", err)
 				val = "0"
 			}
 			fmt.Fprintf(w, "# HELP %s %s\n", m.PromName, m.Help)
@@ -36,8 +37,9 @@ func StartMetricsServer(port string, rdb *redis.Client, metricsDefs []MetricDef)
 		}
 	})
 
-	log.Printf("Metrics server ouvindo em %s/metrics", port)
+	slog.Info("Metrics server ouvindo", "port", port)
 	if err := http.ListenAndServe(port, mux); err != nil {
-		log.Fatalf("metrics: falha ao iniciar servidor: %v", err)
+		slog.Error("falha ao iniciar servidor", "error", err)
+		os.Exit(1)
 	}
 }

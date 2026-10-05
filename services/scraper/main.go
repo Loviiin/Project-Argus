@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
@@ -20,6 +20,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/loviiin/project-argus/pkg/metrics"
 	"github.com/loviiin/project-argus/pkg/tiktok"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
@@ -27,24 +28,33 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
 	cfg := config.LoadConfig()
 
-	fmt.Println("Argus Scraper Worker (Subscriber) iniciando (Arquitetura Sidecar)...")
+	slog.Info("Argus Scraper Worker (Subscriber) iniciando (Arquitetura Sidecar)...")
 
 	// Inicia Pprof em background
 	go func() {
-		log.Println("Iniciando Pprof do Scraper na porta :6060")
-		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
+		slog.Info("Iniciando Pprof do Scraper", "porta", ":6060")
+		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			slog.Error("Pprof server falhou", "error", err)
+		}
 	}()
 
 	// --- NATS ---
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {
-		log.Fatal("Erro NATS:", err)
+		slog.Error("Erro NATS", "error", err)
+		os.Exit(1)
 	}
 	js, err := nc.JetStream()
 	if err != nil {
-		log.Fatal("Erro JetStream:", err)
+		slog.Error("Erro JetStream", "error", err)
+		os.Exit(1)
 	}
 	defer nc.Close()
 
@@ -55,7 +65,7 @@ func main() {
 	}
 	_, err = js.AddStream(streamCfg)
 	if err != nil && err != nats.ErrStreamNameAlreadyInUse {
-		log.Printf("Aviso ao configurar Stream SCRAPE: %v", err)
+		slog.Warn("Aviso ao configurar Stream SCRAPE", "error", err)
 	}
 
 	// Cria Stream DLQ do scraper para evitar loop infinito de NumDelivered > 15
@@ -66,7 +76,7 @@ func main() {
 	}
 	_, err = js.AddStream(dlqCfg)
 	if err != nil && err != nats.ErrStreamNameAlreadyInUse {
-		log.Printf("Aviso ao configurar Stream DLQ: %v", err)
+		slog.Warn("Aviso ao configurar Stream DLQ", "error", err)
 	}
 
 	// --- Redis ---
@@ -88,12 +98,14 @@ func main() {
 		db, dbErr = sql.Open("postgres", cfg.Database.URL)
 	}
 	if dbErr != nil {
-		log.Fatal("Erro conexão Banco:", dbErr)
+		slog.Error("Erro conexão Banco", "error", dbErr)
+		os.Exit(1)
 	}
 
 	// Removido SetMaxOpenConns(1) para evitar starvation
 	if err = db.Ping(); err != nil {
-		log.Fatal("Erro ping Banco:", err)
+		slog.Error("Erro ping Banco", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
@@ -128,14 +140,22 @@ func main() {
 		numWorkers = 1
 	}
 
+	scraperMetrics := []metrics.MetricDef{
+		{RedisKey: "argus:metrics:scraper:scraped", PromName: "argus_scraper_scraped_total", Help: "Total de vídeos scraped", Type: "counter"},
+		{RedisKey: "argus:metrics:scraper:comments", PromName: "argus_scraper_comments_total", Help: "Total de comentários extraídos", Type: "counter"},
+		{RedisKey: "argus:metrics:scraper:errors", PromName: "argus_scraper_errors_total", Help: "Total de erros", Type: "counter"},
+	}
+	go metrics.StartMetricsServer(":8084", rdb, scraperMetrics)
+
 	// --- Subscriber ---
 	sub, err := js.PullSubscribe(subject, group, nats.AckWait(10*time.Minute))
 	if err != nil {
-		log.Fatal("Erro ao criar pull subscriber:", err)
+		slog.Error("Erro ao criar pull subscriber", "error", err)
+		os.Exit(1)
 	}
 	defer sub.Unsubscribe()
 
-	log.Printf("Scraper Worker [%s] %s rodando! Consumindo %s... Max workers concorrentes: %d", workerType, workerIDStr, subject, numWorkers)
+	slog.Info("Scraper Worker rodando!", "worker_type", workerType, "worker_id", workerIDStr, "subject", subject, "max_workers", numWorkers)
 
 	// Aguarda sinal de parada
 	ctx, cancel := context.WithCancel(context.Background())
@@ -145,7 +165,7 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
-		fmt.Printf("\nSinal recebido. Encerrando Scraper Worker [%s] (Aguardando rotinas atuais)...\n", workerType)
+		slog.Info("Sinal recebido. Encerrando Scraper Worker (Aguardando rotinas atuais)...", "worker_type", workerType)
 		cancel()
 	}()
 
@@ -165,7 +185,7 @@ loop:
 			if err == nats.ErrTimeout || err == nats.ErrConnectionClosed || err == nats.ErrBadSubscription {
 				continue // Nenhuma mensagem na fila ou dreno iniciando
 			}
-			log.Printf("[Worker %s] Erro no Fetch: %v", workerIDStr, err)
+			slog.Error("Erro no Fetch", "worker_id", workerIDStr, "error", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -181,19 +201,19 @@ loop:
 
 			meta, err := m.Metadata()
 			if err != nil {
-				log.Printf("[Worker %s] ❌ Erro lendo metadata: %v", workerIDStr, err)
+				slog.Error("Erro lendo metadata", "worker_id", workerIDStr, "error", err)
 				m.Ack()
 				return
 			}
 
 			var job worker.ScrapeJob
 			if err := json.Unmarshal(m.Data, &job); err != nil {
-				log.Printf("[Worker %s] ❌ erro unmarshal job: %v", workerIDStr, err)
+				slog.Error("Erro unmarshal job", "worker_id", workerIDStr, "error", err)
 				m.Ack() // Ack porque falha de parse não resolve com retry
 				return
 			}
 
-			log.Printf("[Worker %s] 📥 Recebido job: %s (Cursor: %d) [Tentativa: %d]", workerIDStr, job.VideoID, job.Cursor, meta.NumDelivered)
+			slog.Info("Recebido job", "worker_id", workerIDStr, "video_id", job.VideoID, "cursor", job.Cursor, "tentativa", meta.NumDelivered)
 
 			// 1. Worker Heartbeat/Processing Lock
 			lockSuffix := fmt.Sprintf("%s:%d", job.VideoID, job.Cursor)
@@ -204,7 +224,7 @@ loop:
 
 			if locked, _ := dedupSv.RDB().SetNX(ctx, lockKey, "1", 10*time.Minute).Result(); !locked {
 				delay := time.Duration(30+rand.Intn(30)) * time.Second
-				log.Printf("[Worker %s] Job %s bloqueado por lock. Nak + Jitter: %v", workerIDStr, lockSuffix, delay)
+				slog.Warn("Job bloqueado por lock. Nak + Jitter", "worker_id", workerIDStr, "job", lockSuffix, "delay", delay)
 				m.NakWithDelay(delay)
 				return
 			}
@@ -212,7 +232,7 @@ loop:
 
 			// 2. Dead Letter Queue (DLQ)
 			if meta.NumDelivered > 15 {
-				log.Printf("[Worker %s] 🚨 Max Retries atingido para %s. Enviando para DLQ...", workerIDStr, job.VideoID)
+				slog.Warn("Max Retries atingido. Enviando para DLQ...", "worker_id", workerIDStr, "video_id", job.VideoID)
 				dlqPayload := map[string]interface{}{
 					"error": "Max retries exceeded",
 					"job":   job,
@@ -223,7 +243,7 @@ loop:
 				}
 				dlqData, _ := json.Marshal(dlqPayload)
 				if _, err := js.Publish("argus.dlq.scraper", dlqData); err != nil {
-					log.Printf("[Worker %s] ❌ erro publicando DLQ: %v", workerIDStr, err)
+					slog.Error("Erro publicando DLQ", "worker_id", workerIDStr, "error", err)
 					m.NakWithDelay(1 * time.Minute)
 					return
 				}
@@ -232,14 +252,20 @@ loop:
 			}
 
 			// Processa o vídeo via Sidecar HTTP
-			err = proc.ProcessVideo(ctx, job)
+			insertedCount, err := proc.ProcessVideo(ctx, job)
 			if err != nil {
-				log.Printf("[Worker %s] ❌ erro processando %s: %v", workerIDStr, job.VideoID, err)
+				slog.Error("Erro processando job", "worker_id", workerIDStr, "video_id", job.VideoID, "error", err)
+				rdb.Incr(ctx, "argus:metrics:scraper:errors")
 				// Exponential Backoff Nak
 				delay := time.Duration(10+rand.Intn(20)) * time.Second
-				log.Printf("[Worker %s] ⏳ Nak no job %s com delay de %v", workerIDStr, job.VideoID, delay)
+				slog.Info("Nak no job com delay", "worker_id", workerIDStr, "video_id", job.VideoID, "delay", delay)
 				m.NakWithDelay(delay)
 				return
+			}
+
+			rdb.Incr(ctx, "argus:metrics:scraper:scraped")
+			if insertedCount > 0 {
+				rdb.IncrBy(ctx, "argus:metrics:scraper:comments", int64(insertedCount))
 			}
 
 			// Ack → confirma processamento bem-sucedido e dados inseridos no PG
@@ -250,7 +276,7 @@ loop:
 		}(msg)
 	}
 
-	fmt.Println("[Worker] Aguardando término das rotinas ativas...")
+	slog.Info("Aguardando término das rotinas ativas...")
 	wg.Wait()
-	fmt.Println("[Worker] Scraper Worker encerrado gracefully.")
+	slog.Info("Scraper Worker encerrado gracefully.")
 }

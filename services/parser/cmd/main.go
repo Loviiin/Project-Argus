@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -29,15 +29,23 @@ import (
 
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/loviiin/project-argus/pkg/metrics"
 )
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
 	cfg := config.LoadConfig()
 
 	// Inicia Pprof em background
 	go func() {
-		log.Println("Iniciando Pprof do Parser na porta :6060")
-		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
+		slog.Info("Iniciando Pprof do Parser", "porta", ":6060")
+		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			slog.Error("Pprof server falhou", "error", err)
+		}
 	}()
 
 	var repo repository.Repository
@@ -47,7 +55,8 @@ func main() {
 	if cfg.Database.Type == "sqlite" {
 		sqliteRepo, errDB := repository.NewSQLiteRepository(cfg.Database.SQLitePath)
 		if errDB != nil {
-			log.Fatal("Erro fatal no SQLite:", errDB)
+			slog.Error("Erro fatal no SQLite", "error", errDB)
+			os.Exit(1)
 		}
 		repo = sqliteRepo
 		indexer = search.NewSQLiteFTS5Indexer(sqliteRepo.DB())
@@ -55,13 +64,14 @@ func main() {
 		apiServer := api.NewServer(sqliteRepo.DB())
 		go func() {
 			if err := apiServer.Start(":8080"); err != nil {
-				log.Printf("Erro no servidor da API: %v", err)
+				slog.Error("Erro no servidor da API", "error", err)
 			}
 		}()
 	} else {
 		pgRepo, errDB := repository.NewPostgresRepository(cfg.Database.URL)
 		if errDB != nil {
-			log.Fatal("Erro fatal no Postgres:", errDB)
+			slog.Error("Erro fatal no Postgres", "error", errDB)
+			os.Exit(1)
 		}
 		repo = pgRepo
 		indexer = search.NewIndexer(cfg.Meilisearch.Host, cfg.Meilisearch.Key, cfg.Meilisearch.Index)
@@ -72,7 +82,8 @@ func main() {
 
 	nc, err := nats.Connect(cfg.Nats.URL)
 	if err != nil {
-		log.Fatal("Erro conectando ao NATS:", err)
+		slog.Error("Erro conectando ao NATS", "error", err)
+		os.Exit(1)
 	}
 	defer nc.Close()
 
@@ -83,7 +94,8 @@ func main() {
 	})
 
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		log.Fatalf("Erro fatal: Redis não responde em %s: %v", cfg.Redis.Address, err)
+		slog.Error("Erro fatal: Redis não responde", "address", cfg.Redis.Address, "error", err)
+		os.Exit(1)
 	}
 
 	dedupSv := dedup.NewDeduplicator(rdb, cfg.Redis.TTLHours)
@@ -98,7 +110,7 @@ func main() {
 		Storage:  nats.FileStorage,
 	})
 	if err != nil {
-		fmt.Printf("Stream ENRICH check: %v\n", err)
+		slog.Warn("Stream ENRICH check", "error", err)
 	}
 
 	// Garantir que o stream de extração de texto exista
@@ -108,10 +120,18 @@ func main() {
 		Storage:  nats.FileStorage,
 	})
 	if err != nil {
-		fmt.Printf("Stream TEXT_EXTRACTED check: %v\n", err)
+		slog.Warn("Stream TEXT_EXTRACTED check", "error", err)
 	}
 
-	fmt.Println("Parser Service Iniciado. Rodando Fast Ingestion Flow & Discord Enricher Flow...")
+	slog.Info("Parser Service Iniciado. Rodando Fast Ingestion Flow & Discord Enricher Flow...")
+
+	parserMetrics := []metrics.MetricDef{
+		{RedisKey: "argus:metrics:parser:processed", PromName: "argus_parser_processed_total", Help: "Total de mensagens processadas", Type: "counter"},
+		{RedisKey: "argus:metrics:parser:invites_found", PromName: "argus_parser_invites_found_total", Help: "Total de convites Discord encontrados", Type: "counter"},
+		{RedisKey: "argus:metrics:parser:enriched", PromName: "argus_parser_enriched_total", Help: "Total de servidores enriquecidos", Type: "counter"},
+		{RedisKey: "argus:metrics:parser:errors", PromName: "argus_parser_errors_total", Help: "Total de erros", Type: "counter"},
+	}
+	go metrics.StartMetricsServer(":8084", rdb, parserMetrics)
 
 	finder := logic.NewDiscordFinder()
 	discordClient := client.NewDiscordClient(cfg.Discord.ProxyURL, cfg.Discord.Token, rdb)
@@ -128,7 +148,8 @@ func main() {
 
 		var payload dto.OcrMessage
 		if err := json.Unmarshal(msg.Data, &payload); err != nil {
-			log.Printf("[Fast Ingestion] Erro decodificando JSON: %v", err)
+			slog.Error("Erro decodificando JSON [Fast Ingestion]", "error", err)
+			rdb.Incr(context.Background(), "argus:metrics:parser:errors")
 			msg.Ack()
 			return
 		}
@@ -142,7 +163,7 @@ func main() {
 		lockKey := fmt.Sprintf("argus:processing_lock:fast_ingestion:%s", hashStr)
 		if locked, _ := dedupSv.RDB().SetNX(context.Background(), lockKey, "1", 10*time.Minute).Result(); !locked {
 			delay := time.Duration(30+rand.Intn(30)) * time.Second
-			log.Printf("[Fast Ingestion] Job %s bloqueado por lock. Nak + Jitter: %v", hashStr, delay)
+			slog.Warn("Job bloqueado por lock. Nak + Jitter [Fast Ingestion]", "job", hashStr, "delay", delay)
 			msg.NakWithDelay(delay)
 			return
 		}
@@ -150,13 +171,13 @@ func main() {
 
 		processed, err := dedupSv.CheckIfProcessed(context.Background(), "processed_job", "fast_ingestion:"+hashStr)
 		if err == nil && processed {
-			log.Printf("[Fast Ingestion] Mensagem duplicada ignorada: %s", hashStr)
+			slog.Info("Mensagem duplicada ignorada [Fast Ingestion]", "job", hashStr)
 			msg.Ack()
 			return
 		}
 
 		if meta.NumDelivered > 15 {
-			log.Printf("[Fast Ingestion] 🚨 Max Retries atingido para %s. Enviando para DLQ...", hashStr)
+			slog.Warn("Max Retries atingido. Enviando para DLQ... [Fast Ingestion]", "job", hashStr)
 			dlqData, _ := json.Marshal(map[string]interface{}{
 				"error":    "Max retries exceeded",
 				"payload":  payload,
@@ -187,7 +208,8 @@ func main() {
 				}
 				seen[inviteCode] = true
 
-				fmt.Printf("[Fast Ingestion] Encontrado: %s\n", inviteCode)
+				slog.Info("Encontrado [Fast Ingestion]", "invite_code", inviteCode)
+				rdb.Incr(context.Background(), "argus:metrics:parser:invites_found")
 
 				author := payload.AuthorID
 				if author == "" {
@@ -204,7 +226,8 @@ func main() {
 				}
 
 				if _, err := repo.Save(context.Background(), artifact); err != nil {
-					fmt.Printf("[Fast Ingestion] Erro BD: %v\n", err)
+					slog.Error("Erro BD [Fast Ingestion]", "error", err)
+					rdb.Incr(context.Background(), "argus:metrics:parser:errors")
 					delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
 					msg.NakWithDelay(delay)
 					return
@@ -213,7 +236,7 @@ func main() {
 				// Webhook Supabase assíncrono
 				go func(invCode, pSourceUrl, pRawOcr, pAuthorId string, pIsReply bool) {
 					if err := supabaseClient.SendArtifact(invCode, "", pSourceUrl, pRawOcr, pAuthorId, pIsReply); err != nil {
-						log.Printf("[Webhook] Erro ao enviar para Supabase: %v", err)
+						slog.Error("Erro ao enviar para Supabase [Webhook]", "error", err)
 					}
 				}(inviteCode, payload.SourcePath, payload.TextContent, author, payload.IsReply)
 
@@ -237,7 +260,8 @@ func main() {
 
 				err = indexer.IndexData(meiliPayload)
 				if err != nil {
-					fmt.Printf("[Fast Ingestion] Falha na indexação bruta: %v\n", err)
+					slog.Error("Falha na indexação bruta [Fast Ingestion]", "error", err)
+					rdb.Incr(context.Background(), "argus:metrics:parser:errors")
 					delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
 					msg.NakWithDelay(delay)
 					return
@@ -245,7 +269,7 @@ func main() {
 
 				enrichJob, _ := json.Marshal(dto.DiscordEnrichJob{InviteCode: inviteCode})
 				if _, err := js.Publish("jobs.enrich.discord", enrichJob); err != nil {
-					log.Printf("[Fast Ingestion] Erro publicando %s para enrich: %v", inviteCode, err)
+					slog.Error("Erro publicando para enrich [Fast Ingestion]", "invite_code", inviteCode, "error", err)
 					// Ignore publish errors so we don't block the ingestion flow fully
 				}
 			}
@@ -253,11 +277,13 @@ func main() {
 
 		// Sucesso: Grava chave idempotencia e Ack
 		dedupSv.MarkAsSeen(context.Background(), "processed_job", "fast_ingestion:"+hashStr)
+		rdb.Incr(context.Background(), "argus:metrics:parser:processed")
 		msg.Ack()
 	}, nats.Durable("parser-fast-ingestion"), nats.DeliverAll(), nats.InactiveThreshold(30*time.Second), nats.ManualAck())
 
 	if err != nil {
-		log.Fatalf("Erro ao iniciar Fast Ingestion: %v", err)
+		slog.Error("Erro ao iniciar Fast Ingestion", "error", err)
+		os.Exit(1)
 	}
 
 	// ==========================================
@@ -272,7 +298,8 @@ func main() {
 
 		var job dto.DiscordEnrichJob
 		if err := json.Unmarshal(msg.Data, &job); err != nil {
-			log.Printf("[Enricher] Erro decodificando Job: %v", err)
+			slog.Error("Erro decodificando Job [Enricher]", "error", err)
+			rdb.Incr(context.Background(), "argus:metrics:parser:errors")
 			msg.Ack()
 			return
 		}
@@ -281,7 +308,7 @@ func main() {
 		lockKey := fmt.Sprintf("argus:processing_lock:%s", job.InviteCode)
 		if locked, _ := dedupSv.RDB().SetNX(context.Background(), lockKey, "1", 10*time.Minute).Result(); !locked {
 			delay := time.Duration(30+rand.Intn(30)) * time.Second
-			log.Printf("[Enricher] Job %s bloqueado por lock. Nak + Jitter: %v", job.InviteCode, delay)
+			slog.Warn("Job bloqueado por lock. Nak + Jitter [Enricher]", "invite_code", job.InviteCode, "delay", delay)
 			msg.NakWithDelay(delay)
 			return
 		}
@@ -289,13 +316,13 @@ func main() {
 
 		processed, err := dedupSv.CheckIfProcessed(context.Background(), "processed_job", job.InviteCode)
 		if err == nil && processed {
-			log.Printf("[Enricher] Mensagem duplicada ignorada: %s", job.InviteCode)
+			slog.Info("Mensagem duplicada ignorada [Enricher]", "invite_code", job.InviteCode)
 			msg.Ack()
 			return
 		}
 
 		if meta.NumDelivered > 15 {
-			log.Printf("[Enricher] 🚨 Max Retries atingido para %s. Marcando como rate_limited e enviando para DLQ...", job.InviteCode)
+			slog.Warn("Max Retries atingido. Marcando como rate_limited e enviando para DLQ... [Enricher]", "invite_code", job.InviteCode)
 			repo.UpdateStatus(context.Background(), job.InviteCode, "rate_limited")
 			dlqData, _ := json.Marshal(map[string]interface{}{
 				"error":    "Max retries exceeded",
@@ -307,12 +334,12 @@ func main() {
 			return
 		}
 
-		fmt.Printf("[Enricher] Processando: %s [Tentativa: %d]\n", job.InviteCode, meta.NumDelivered)
+		slog.Info("Processando [Enricher]", "invite_code", job.InviteCode, "tentativa", meta.NumDelivered)
 
 		// 1. Checa no Meilisearch SE o registro já NÃO tem os campos enriquecidos:
 		if existingDoc, err := indexer.GetDocument(job.InviteCode); err == nil {
 			if existingDoc.ServerName != "" && existingDoc.Icon != "" {
-				fmt.Printf("[Enricher] ⏭️ Skiped: %s já enriquecido (%s). Poupando a API.\n", job.InviteCode, existingDoc.ServerName)
+				slog.Info("Skiped: já enriquecido. Poupando a API [Enricher]", "invite_code", job.InviteCode, "server_name", existingDoc.ServerName)
 				dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
 				msg.Ack()
 				return
@@ -323,14 +350,14 @@ func main() {
 		if err != nil {
 			errMsg := strings.ToLower(err.Error())
 			if strings.Contains(errMsg, "rate limited") || strings.Contains(errMsg, "429") || strings.Contains(errMsg, "circuit breaker") {
-				fmt.Printf("[Enricher] Circuit Breaker / Rate limit ativo. Estacionando %s como rate_limited.\n", job.InviteCode)
+				slog.Warn("Circuit Breaker / Rate limit ativo. Estacionando como rate_limited [Enricher]", "invite_code", job.InviteCode)
 				repo.UpdateStatus(context.Background(), job.InviteCode, "rate_limited")
 				// NÃO marca como seen — o recovery goroutine vai retentar quando o circuit breaker liberar
 				msg.Ack()
 				return
 			}
 			if strings.Contains(errMsg, "inválido ou expirado") || strings.Contains(errMsg, "404") {
-				fmt.Printf("[Enricher] %s expirado. Marcando como 'expired' nas bases.\n", job.InviteCode)
+				slog.Info("Expirado. Marcando como 'expired' nas bases [Enricher]", "invite_code", job.InviteCode)
 
 				// Atualizar registro como expirado
 				indexer.UpdateData(map[string]interface{}{
@@ -345,14 +372,15 @@ func main() {
 			}
 
 			// Outros erros
-			fmt.Printf("[Enricher] Erro inesperado %s: %v\n", job.InviteCode, err)
+			slog.Error("Erro inesperado [Enricher]", "invite_code", job.InviteCode, "error", err)
+			rdb.Incr(context.Background(), "argus:metrics:parser:errors")
 			delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
 			msg.NakWithDelay(delay)
 			return
 		}
 
-		fmt.Printf("[Enricher] Dados Sucesso: %s → %s | Membros: %d\n",
-			job.InviteCode, inviteInfo.Guild.Name, inviteInfo.ApproximateMemberCount)
+		slog.Info("Dados Sucesso [Enricher]", "invite_code", job.InviteCode, "server_name", inviteInfo.Guild.Name, "membros", inviteInfo.ApproximateMemberCount)
+		rdb.Incr(context.Background(), "argus:metrics:parser:enriched")
 
 		var iconURL string
 		if inviteInfo.Guild.Icon != "" {
@@ -378,25 +406,29 @@ func main() {
 			"status":       "active",
 		})
 		if err != nil {
-			fmt.Printf("[Enricher] Erro ao atualizar Meilisearch: %v\n", err)
+			slog.Error("Erro ao atualizar Meilisearch [Enricher]", "error", err)
+			rdb.Incr(context.Background(), "argus:metrics:parser:errors")
 			delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
 			msg.NakWithDelay(delay)
 			return
 		}
 
 		if err := repo.UpdateEnrichedData(context.Background(), job.InviteCode, inviteInfo.Guild.Name, inviteInfo.Guild.ID, iconURL, inviteInfo.ApproximateMemberCount, "active"); err != nil {
-			fmt.Printf("[Enricher] Erro ao atualizar PostgreSQL: %v\n", err)
+			slog.Error("Erro ao atualizar PostgreSQL [Enricher]", "error", err)
+			rdb.Incr(context.Background(), "argus:metrics:parser:errors")
 			delay := time.Duration(math.Pow(5, float64(meta.NumDelivered-1))) * 5 * time.Second
 			msg.NakWithDelay(delay)
 			return
 		}
 
 		dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
+		rdb.Incr(context.Background(), "argus:metrics:parser:processed")
 		msg.Ack()
 	}, nats.Durable("discord-enricher"), nats.DeliverAll(), nats.ManualAck())
 
 	if err != nil {
-		log.Fatalf("Erro ao iniciar Discord Enricher: %v", err)
+		slog.Error("Erro ao iniciar Discord Enricher", "error", err)
+		os.Exit(1)
 	}
 
 	// ==========================================
@@ -414,7 +446,7 @@ func main() {
 
 			invites, err := repo.GetRateLimitedInvites(context.Background(), 50)
 			if err != nil {
-				log.Printf("[Recovery] Erro buscando invites rate_limited: %v", err)
+				slog.Error("Erro buscando invites rate_limited [Recovery]", "error", err)
 				continue
 			}
 
@@ -422,14 +454,14 @@ func main() {
 				continue
 			}
 
-			fmt.Printf("[Recovery] Circuit breaker livre. Re-publicando %d invites rate_limited...\n", len(invites))
+			slog.Info("Circuit breaker livre. Re-publicando invites rate_limited... [Recovery]", "quantidade", len(invites))
 			for _, code := range invites {
 				// Limpa a flag de dedup pra esse invite poder ser processado
 				dedupSv.RDB().Del(context.Background(), fmt.Sprintf("argus:processed_job:%s", code))
 
 				enrichJob, _ := json.Marshal(dto.DiscordEnrichJob{InviteCode: code})
 				if _, err := js.Publish("jobs.enrich.discord", enrichJob); err != nil {
-					log.Printf("[Recovery] Erro re-publicando %s: %v", code, err)
+					slog.Error("Erro re-publicando [Recovery]", "invite_code", code, "error", err)
 				}
 			}
 		}
@@ -439,20 +471,20 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	fmt.Println("\nSinal recebido. Drenando conexões NATS para Graceful Shutdown...")
+	slog.Info("Sinal recebido. Drenando conexões NATS para Graceful Shutdown...")
 
 	err = subFast.Drain()
 	if err != nil {
-		fmt.Printf("Erro ao drenar Fast Ingestion: %v\n", err)
+		slog.Error("Erro ao drenar Fast Ingestion", "error", err)
 	}
 
 	err = subEnrich.Drain()
 	if err != nil {
-		fmt.Printf("Erro ao drenar Discord Enricher: %v\n", err)
+		slog.Error("Erro ao drenar Discord Enricher", "error", err)
 	}
 
 	// Drain é assíncrono ou síncrono dependendo do uso; nas versões recentes Wait() é necessário ou Time Sleep de garantia
 	// Mas como nc.Close() também aguarda/interrompe o resto, isso é suficiente.
 	time.Sleep(1 * time.Second)
-	fmt.Println("Parser Service encerrado gracefully.")
+	slog.Info("Parser Service encerrado gracefully.")
 }
