@@ -45,7 +45,7 @@
                     </div>
                     <div>
                         <label>Status:</label>
-                        <select id="status-filter" onchange="loadArtifacts(1)">
+                        <select id="status-filter" onchange="applyFilters()">
                             <option value="ALL">Mostrar Todos</option>
                             <option value="VALID">Apenas Válidos</option>
                             <option value="PENDING">Apenas Pendentes</option>
@@ -55,7 +55,7 @@
                     </div>
                     <div>
                         <label>Ordenar Por:</label>
-                        <select id="sort-by-filter" onchange="const q = document.getElementById('search-input') ? document.getElementById('search-input').value.trim() : ''; if(q.length >= 2) { searchArtifacts(q, 1); } else { loadArtifacts(1); }">
+                        <select id="sort-by-filter" onchange="applyFilters()">
                             <option value="date">Data</option>
                             <option value="members">Membros</option>
                             <option value="name">Nome</option>
@@ -64,11 +64,11 @@
                     </div>
                     <div>
                         <label>Tag:</label>
-                        <input type="text" id="tag-filter" placeholder="Ex: gaming" style="width: 100px; padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white;" onchange="const q = document.getElementById('search-input') ? document.getElementById('search-input').value.trim() : ''; if(q.length >= 2) { searchArtifacts(q, 1); } else { loadArtifacts(1); }">
+                        <input type="text" id="tag-filter" placeholder="Ex: gaming" style="width: 100px; padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white;">
                     </div>
                     <div>
                         <label>Ordem:</label>
-                        <select id="sort-filter" onchange="const q = document.getElementById('search-input') ? document.getElementById('search-input').value.trim() : ''; if(q.length >= 2) { searchArtifacts(q, 1); } else { loadArtifacts(1); }">
+                        <select id="sort-filter" onchange="applyFilters()">
                             <option value="desc">Descrescente</option>
                             <option value="asc">Ascendente</option>
                         </select>

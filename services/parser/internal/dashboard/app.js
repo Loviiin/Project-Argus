@@ -473,6 +473,17 @@ async function loadTopContributors() {
     }
 }
 
+function applyFilters() {
+    const searchInput = document.getElementById('search-input');
+    const query = searchInput ? searchInput.value.trim() : '';
+    if (query.length >= 2) {
+        searchArtifacts(query, 1);
+    } else {
+        loadArtifacts(1);
+    }
+}
+window.applyFilters = applyFilters;
+
 if (typeof window !== 'undefined') {
     window.onload = () => {
         loadArtifacts();
@@ -497,15 +508,15 @@ if (typeof window !== 'undefined') {
         const minMembers = document.getElementById('min-members');
         const maxMembers = document.getElementById('max-members');
         const tagFilter = document.getElementById('tag-filter');
-        
-        const applyFilters = () => {
-            const query = searchInput ? searchInput.value.trim() : '';
-            if (query.length >= 2) searchArtifacts(query, 1);
-            else loadArtifacts(1);
-        };
+        const statusFilter = document.getElementById('status-filter');
+        const sortByFilter = document.getElementById('sort-by-filter');
+        const sortFilter = document.getElementById('sort-filter');
 
         if (minMembers) minMembers.addEventListener('input', applyFilters);
         if (maxMembers) maxMembers.addEventListener('input', applyFilters);
+        if (statusFilter) statusFilter.addEventListener('change', applyFilters);
+        if (sortByFilter) sortByFilter.addEventListener('change', applyFilters);
+        if (sortFilter) sortFilter.addEventListener('change', applyFilters);
         if (tagFilter) tagFilter.addEventListener('input', () => {
             clearTimeout(window.tagFilterTimeout);
             window.tagFilterTimeout = setTimeout(applyFilters, 300);
