@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 
 	_ "modernc.org/sqlite"
 )
@@ -37,82 +38,158 @@ func NewSQLiteRepository(path string) (*SQLiteRepository, error) {
 	return repo, nil
 }
 
+var sqliteMigrations = []Migration{
+	{
+		Version: 1,
+		Name:    "001_initial_schema",
+		Query: `
+			CREATE TABLE IF NOT EXISTS artifacts (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				source_url TEXT NOT NULL,
+				author_id TEXT NOT NULL,
+				discord_invite_code TEXT NOT NULL,
+				discord_server_name TEXT,
+				discord_server_id TEXT,
+				discord_member_count INTEGER,
+				raw_ocr_text TEXT,
+				risk_score INTEGER,
+				processed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				discord_icon TEXT,
+				discord_status TEXT,
+				UNIQUE(source_url, discord_invite_code)
+			);
+		
+			CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
+				discord_invite_code,
+				discord_server_name,
+				raw_ocr_text,
+				source_url,
+				content='artifacts',
+				content_rowid='id'
+			);
+		
+			CREATE TRIGGER IF NOT EXISTS artifacts_ai AFTER INSERT ON artifacts BEGIN
+				INSERT INTO artifacts_fts(rowid, discord_invite_code, discord_server_name, raw_ocr_text, source_url)
+				VALUES (new.id, new.discord_invite_code, new.discord_server_name, new.raw_ocr_text, new.source_url);
+			END;
+		
+			CREATE TRIGGER IF NOT EXISTS artifacts_ad AFTER DELETE ON artifacts BEGIN
+				INSERT INTO artifacts_fts(artifacts_fts, rowid, discord_invite_code, discord_server_name, raw_ocr_text, source_url)
+				VALUES ('delete', old.id, old.discord_invite_code, old.discord_server_name, old.raw_ocr_text, old.source_url);
+			END;
+		
+			CREATE TRIGGER IF NOT EXISTS artifacts_au AFTER UPDATE ON artifacts BEGIN
+				INSERT INTO artifacts_fts(artifacts_fts, rowid, discord_invite_code, discord_server_name, raw_ocr_text, source_url)
+				VALUES ('delete', old.id, old.discord_invite_code, old.discord_server_name, old.raw_ocr_text, old.source_url);
+				INSERT INTO artifacts_fts(rowid, discord_invite_code, discord_server_name, raw_ocr_text, source_url)
+				VALUES (new.id, new.discord_invite_code, new.discord_server_name, new.raw_ocr_text, new.source_url);
+			END;
+		
+			CREATE TABLE IF NOT EXISTS comments (
+				cid TEXT PRIMARY KEY,
+				aweme_id TEXT NOT NULL,
+				text TEXT,
+				digg_count INTEGER DEFAULT 0,
+				reply_comment_total INTEGER DEFAULT 0,
+				uid TEXT,
+				nickname TEXT,
+				unique_id TEXT,
+				avatar_url TEXT,
+				created_at DATETIME,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				reply_id TEXT
+			);
+		`,
+	},
+	{
+		Version: 2,
+		Name:    "002_add_unique_id",
+		Query:   "ALTER TABLE comments ADD COLUMN unique_id TEXT;",
+	},
+	{
+		Version: 3,
+		Name:    "003_add_avatar_url",
+		Query:   "ALTER TABLE comments ADD COLUMN avatar_url TEXT;",
+	},
+	{
+		Version: 4,
+		Name:    "004_add_tags",
+		Query:   "ALTER TABLE artifacts ADD COLUMN tags TEXT DEFAULT '';",
+	},
+	{
+		Version: 5,
+		Name:    "005_add_nickname_index",
+		Query:   "CREATE INDEX IF NOT EXISTS idx_comments_nickname ON comments(nickname);",
+	},
+	{
+		Version: 6,
+		Name:    "006_add_performance_indexes",
+		Query: `
+			CREATE INDEX IF NOT EXISTS idx_artifacts_discord_status ON artifacts(discord_status);
+			CREATE INDEX IF NOT EXISTS idx_artifacts_discord_invite_code ON artifacts(discord_invite_code);
+			CREATE INDEX IF NOT EXISTS idx_artifacts_discord_server_id ON artifacts(discord_server_id);
+			CREATE INDEX IF NOT EXISTS idx_artifacts_processed_at ON artifacts(processed_at);
+			CREATE INDEX IF NOT EXISTS idx_artifacts_member_count ON artifacts(discord_member_count);
+			CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at);
+			CREATE INDEX IF NOT EXISTS idx_comments_aweme_id ON comments(aweme_id);
+		`,
+	},
+}
+
 func (r *SQLiteRepository) runMigrations(ctx context.Context) error {
-	query := `
-	CREATE TABLE IF NOT EXISTS artifacts (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		source_url TEXT NOT NULL,
-		author_id TEXT NOT NULL,
-		discord_invite_code TEXT NOT NULL,
-		discord_server_name TEXT,
-		discord_server_id TEXT,
-		discord_member_count INTEGER,
-		raw_ocr_text TEXT,
-		risk_score INTEGER,
-		processed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		discord_icon TEXT,
-		discord_status TEXT,
-		UNIQUE(source_url, discord_invite_code)
-	);
+	slog.Info("Verificando schema do banco de dados (SQLite)...")
 
-	-- Virtual table para FTS5
-	CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
-		discord_invite_code,
-		discord_server_name,
-		raw_ocr_text,
-		source_url,
-		content='artifacts',
-		content_rowid='id'
-	);
-
-	-- Triggers para manter a tabela FTS atualizada
-	CREATE TRIGGER IF NOT EXISTS artifacts_ai AFTER INSERT ON artifacts BEGIN
-		INSERT INTO artifacts_fts(rowid, discord_invite_code, discord_server_name, raw_ocr_text, source_url)
-		VALUES (new.id, new.discord_invite_code, new.discord_server_name, new.raw_ocr_text, new.source_url);
-	END;
-
-	CREATE TRIGGER IF NOT EXISTS artifacts_ad AFTER DELETE ON artifacts BEGIN
-		INSERT INTO artifacts_fts(artifacts_fts, rowid, discord_invite_code, discord_server_name, raw_ocr_text, source_url)
-		VALUES ('delete', old.id, old.discord_invite_code, old.discord_server_name, old.raw_ocr_text, old.source_url);
-	END;
-
-	CREATE TRIGGER IF NOT EXISTS artifacts_au AFTER UPDATE ON artifacts BEGIN
-		INSERT INTO artifacts_fts(artifacts_fts, rowid, discord_invite_code, discord_server_name, raw_ocr_text, source_url)
-		VALUES ('delete', old.id, old.discord_invite_code, old.discord_server_name, old.raw_ocr_text, old.source_url);
-		INSERT INTO artifacts_fts(rowid, discord_invite_code, discord_server_name, raw_ocr_text, source_url)
-		VALUES (new.id, new.discord_invite_code, new.discord_server_name, new.raw_ocr_text, new.source_url);
-	END;
-
-	CREATE TABLE IF NOT EXISTS comments (
-		cid TEXT PRIMARY KEY,
-		aweme_id TEXT NOT NULL,
-		text TEXT,
-		digg_count INTEGER DEFAULT 0,
-		reply_comment_total INTEGER DEFAULT 0,
-		uid TEXT,
-		nickname TEXT,
-		unique_id TEXT,
-		avatar_url TEXT,
-		created_at DATETIME,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		reply_id TEXT
-	);
-
-	`
-	// Tabela principal e triggers
-	if _, err := r.dbWrite.ExecContext(ctx, query); err != nil {
-		return fmt.Errorf("falha criar schemas iniciais: %w", err)
+	_, err := r.dbWrite.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		slog.Error("Falha ao criar tabela schema_migrations no SQLite", "erro", err)
+		return err
 	}
 
-	// Executamos ALTER TABLE separadamente para que, se um falhar (coluna já existe), o outro execute.
-	r.dbWrite.ExecContext(ctx, "ALTER TABLE comments ADD COLUMN unique_id TEXT;")
-	r.dbWrite.ExecContext(ctx, "ALTER TABLE comments ADD COLUMN avatar_url TEXT;")
-	
-	// Adicionar tags (Versão 5)
-	r.dbWrite.ExecContext(ctx, "ALTER TABLE artifacts ADD COLUMN tags TEXT DEFAULT '';")
+	var count int
+	err = r.dbWrite.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&count)
+	if err == nil && count == 0 {
+		var artifactsExists bool
+		r.dbWrite.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts')").Scan(&artifactsExists)
+		if artifactsExists {
+			slog.Info("Detectado banco existente (SQLite). Marcando migrations antigas como já aplicadas para não reexecutar.")
+			// As migrations 1 a 5 já foram aplicadas manualmente antes da tabela schema_migrations existir
+			for i := 0; i < 5; i++ {
+				r.dbWrite.ExecContext(ctx, "INSERT INTO schema_migrations (version, name) VALUES (?, ?)", sqliteMigrations[i].Version, sqliteMigrations[i].Name)
+			}
+		}
+	}
 
-	// Adicionar índices para otimizar queries
-	r.dbWrite.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_comments_nickname ON comments(nickname);")
+	for _, m := range sqliteMigrations {
+		var applied bool
+		err := r.dbWrite.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = ?)", m.Version).Scan(&applied)
+		if err != nil {
+			slog.Error("Falha ao verificar status da migration", "version", m.Version, "erro", err)
+			continue
+		}
+
+		if applied {
+			continue
+		}
+
+		slog.Info("Aplicando migration...", "version", m.Version, "name", m.Name)
+		if _, err := r.dbWrite.ExecContext(ctx, m.Query); err != nil {
+			slog.Warn("Aviso na migration (pode já estar aplicada parcialmente)", "name", m.Name, "erro", err)
+		}
+
+		if _, err := r.dbWrite.ExecContext(ctx, "INSERT INTO schema_migrations (version, name) VALUES (?, ?)", m.Version, m.Name); err != nil {
+			slog.Error("Falha ao registrar migration aplicada", "name", m.Name, "erro", err)
+		} else {
+			slog.Info("Migration aplicada com sucesso.", "version", m.Version, "name", m.Name)
+		}
+	}
+
+	slog.Info("Migrations concluídas no SQLite.")
 	return nil
 }
 

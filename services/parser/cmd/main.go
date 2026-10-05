@@ -288,7 +288,7 @@ func main() {
 		dedupSv.MarkAsSeen(context.Background(), "processed_job", "fast_ingestion:"+hashStr)
 		rdb.Incr(context.Background(), "argus:metrics:parser:processed")
 		msg.Ack()
-	}, nats.Durable("parser-fast-ingestion"), nats.DeliverAll(), nats.InactiveThreshold(30*time.Second), nats.ManualAck())
+	}), nats.Durable("parser-fast-ingestion"), nats.DeliverAll(), nats.InactiveThreshold(30*time.Second), nats.ManualAck())
 
 	if err != nil {
 		slog.Error("Erro ao iniciar Fast Ingestion", "error", err)
@@ -439,7 +439,7 @@ func main() {
 		dedupSv.MarkAsSeen(context.Background(), "processed_job", job.InviteCode)
 		rdb.Incr(context.Background(), "argus:metrics:parser:processed")
 		msg.Ack()
-	}, nats.Durable("discord-enricher"), nats.DeliverAll(), nats.ManualAck())
+	}), nats.Durable("discord-enricher"), nats.DeliverAll(), nats.ManualAck())
 
 	if err != nil {
 		slog.Error("Erro ao iniciar Discord Enricher", "error", err)
