@@ -19,8 +19,13 @@ type MetricDef struct {
 }
 
 // StartMetricsServer inicia um servidor HTTP que expõe métricas no formato Prometheus.
-func StartMetricsServer(port string, rdb *redis.Client, metricsDefs []MetricDef) {
+func StartMetricsServer(port string, rdb *redis.Client, metricsDefs []MetricDef, healthHandler http.HandlerFunc) {
 	mux := http.NewServeMux()
+	
+	if healthHandler != nil {
+		mux.HandleFunc("/healthz", healthHandler)
+	}
+
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.Background()
 		for _, m := range metricsDefs {

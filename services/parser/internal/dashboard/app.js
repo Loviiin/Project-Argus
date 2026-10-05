@@ -396,12 +396,17 @@ async function loadStats() {
                     <h3 style="color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px;">Rate Limited</h3>
                     <div class="stat-value" style="font-size: 2.5rem; color: #e74c3c; font-weight: 800; text-shadow: 0 0 20px rgba(231, 76, 60, 0.3); margin-top: 0.5rem;" id="stat-rl">0</div>
                 </div>
+                <div class="card" style="text-align: center; background: linear-gradient(135deg, rgba(155, 89, 182, 0.1) 0%, rgba(25, 28, 36, 0.6) 100%);">
+                    <h3 style="color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px;">DLQ (Falhas)</h3>
+                    <div class="stat-value" style="font-size: 2.5rem; color: #9b59b6; font-weight: 800; text-shadow: 0 0 20px rgba(155, 89, 182, 0.3); margin-top: 0.5rem;" id="stat-dlq">0</div>
+                </div>
             `;
 
             animateValue(document.getElementById('stat-total'), 0, data.total, 1000);
             animateValue(document.getElementById('stat-24h'), 0, data.total_24h, 1000);
             animateValue(document.getElementById('stat-active'), 0, data.status.active, 1000);
             animateValue(document.getElementById('stat-rl'), 0, data.status.rate_limited, 1000);
+            animateValue(document.getElementById('stat-dlq'), 0, data.dlq_count || 0, 1000);
         }
 
         const tagsList = document.getElementById('top-tags-list');

@@ -14,6 +14,7 @@ import (
 
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/loviiin/project-argus/pkg/healthcheck"
 	"github.com/loviiin/project-argus/pkg/metrics"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
@@ -97,7 +98,8 @@ func main() {
 		{RedisKey: "argus:metrics:discovery:duplicates", PromName: "argus_discovery_duplicates_total", Help: "Total de videos ignorados por duplicata", Type: "counter"},
 		{RedisKey: "argus:metrics:discovery:failed", PromName: "argus_discovery_failed_total", Help: "Total de falhas criticas de processamento/publish", Type: "counter"},
 	}
-	go metrics.StartMetricsServer(":8081", rdb, discoveryMetrics)
+	healthHandler := healthcheck.New(nc, rdb, nil).Handler
+	go metrics.StartMetricsServer(":8081", rdb, discoveryMetrics, healthHandler)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

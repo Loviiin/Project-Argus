@@ -29,7 +29,9 @@ import (
 
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/loviiin/project-argus/pkg/healthcheck"
 	"github.com/loviiin/project-argus/pkg/metrics"
+	"github.com/loviiin/project-argus/pkg/natsutil"
 )
 
 func main() {
@@ -52,6 +54,8 @@ func main() {
 	var err error
 	var indexer search.SearchIndexer
 
+	var apiServer *api.Server
+
 	if cfg.Database.Type == "sqlite" {
 		sqliteRepo, errDB := repository.NewSQLiteRepository(cfg.Database.SQLitePath)
 		if errDB != nil {
@@ -61,7 +65,7 @@ func main() {
 		repo = sqliteRepo
 		indexer = search.NewSQLiteFTS5Indexer(sqliteRepo.DB())
 
-		apiServer := api.NewServer(sqliteRepo.DB())
+		apiServer = api.NewServer(sqliteRepo.DB(), nil)
 		go func() {
 			if err := apiServer.Start(":8080"); err != nil {
 				slog.Error("Erro no servidor da API", "error", err)
@@ -86,6 +90,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer nc.Close()
+
+	if apiServer != nil {
+		apiServer.SetNATS(nc)
+	}
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.Redis.Address,
@@ -129,9 +137,10 @@ func main() {
 		{RedisKey: "argus:metrics:parser:processed", PromName: "argus_parser_processed_total", Help: "Total de mensagens processadas", Type: "counter"},
 		{RedisKey: "argus:metrics:parser:invites_found", PromName: "argus_parser_invites_found_total", Help: "Total de convites Discord encontrados", Type: "counter"},
 		{RedisKey: "argus:metrics:parser:enriched", PromName: "argus_parser_enriched_total", Help: "Total de servidores enriquecidos", Type: "counter"},
-		{RedisKey: "argus:metrics:parser:errors", PromName: "argus_parser_errors_total", Help: "Total de erros", Type: "counter"},
+		{RedisKey: "argus:metrics:parser:errors", PromName: "argus_parser_errors_total", Help: "Total de errors", Type: "counter"},
 	}
-	go metrics.StartMetricsServer(":8084", rdb, parserMetrics)
+	healthHandler := healthcheck.New(nc, rdb, nil).Handler
+	go metrics.StartMetricsServer(":8084", rdb, parserMetrics, healthHandler)
 
 	finder := logic.NewDiscordFinder()
 	discordClient := client.NewDiscordClient(cfg.Discord.ProxyURL, cfg.Discord.Token, rdb)
@@ -139,7 +148,7 @@ func main() {
 	// ==========================================
 	// 1. FAST INGESTION FLOW
 	// ==========================================
-	subFast, err := js.Subscribe("data.text_extracted", func(msg *nats.Msg) {
+	subFast, err := js.Subscribe("data.text_extracted", natsutil.SafeHandler(func(msg *nats.Msg) {
 		meta, err := msg.Metadata()
 		if err != nil {
 			msg.Ack()
@@ -289,7 +298,7 @@ func main() {
 	// ==========================================
 	// 2. DISCORD ENRICHER FLOW
 	// ==========================================
-	subEnrich, err := js.Subscribe("jobs.enrich.discord", func(msg *nats.Msg) {
+	subEnrich, err := js.Subscribe("jobs.enrich.discord", natsutil.SafeHandler(func(msg *nats.Msg) {
 		meta, err := msg.Metadata()
 		if err != nil {
 			msg.Ack()

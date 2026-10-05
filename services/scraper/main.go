@@ -17,10 +17,11 @@ import (
 
 	"scraper/internal/worker"
 
-	_ "github.com/lib/pq"
 	"github.com/loviiin/project-argus/pkg/config"
 	"github.com/loviiin/project-argus/pkg/dedup"
+	"github.com/loviiin/project-argus/pkg/healthcheck"
 	"github.com/loviiin/project-argus/pkg/metrics"
+	"github.com/loviiin/project-argus/pkg/natsutil"
 	"github.com/loviiin/project-argus/pkg/tiktok"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
@@ -145,7 +146,8 @@ func main() {
 		{RedisKey: "argus:metrics:scraper:comments", PromName: "argus_scraper_comments_total", Help: "Total de comentários extraídos", Type: "counter"},
 		{RedisKey: "argus:metrics:scraper:errors", PromName: "argus_scraper_errors_total", Help: "Total de erros", Type: "counter"},
 	}
-	go metrics.StartMetricsServer(":8084", rdb, scraperMetrics)
+	healthHandler := healthcheck.New(nc, rdb, nil).Handler
+	go metrics.StartMetricsServer(":8084", rdb, scraperMetrics, healthHandler)
 
 	// --- Subscriber ---
 	sub, err := js.PullSubscribe(subject, group, nats.AckWait(10*time.Minute))
@@ -195,10 +197,7 @@ loop:
 		sem <- struct{}{}
 		wg.Add(1)
 
-		go func(m *nats.Msg) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
+		handler := natsutil.SafeHandler(func(m *nats.Msg) {
 			meta, err := m.Metadata()
 			if err != nil {
 				slog.Error("Erro lendo metadata", "worker_id", workerIDStr, "error", err)
@@ -271,8 +270,13 @@ loop:
 			// Ack → confirma processamento bem-sucedido e dados inseridos no PG
 			m.Ack()
 
-			// Delay anti-rate-limit entre jobs (3-8 segundos) para não estressar logo após
 			worker.RandomDelay(3, 8)
+		})
+
+		go func(m *nats.Msg) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			handler(m)
 		}(msg)
 	}
 

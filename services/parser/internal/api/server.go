@@ -9,14 +9,21 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/nats-io/nats.go"
 )
 
 type Server struct {
 	db *sql.DB
+	nc *nats.Conn
 }
 
-func NewServer(db *sql.DB) *Server {
-	return &Server{db: db}
+func NewServer(db *sql.DB, nc *nats.Conn) *Server {
+	return &Server{db: db, nc: nc}
+}
+
+func (s *Server) SetNATS(nc *nats.Conn) {
+	s.nc = nc
 }
 
 func (s *Server) Start(port string) error {

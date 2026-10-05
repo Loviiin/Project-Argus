@@ -23,7 +23,7 @@ func main() {
 	}
 
 	// Inicializa o servidor da API (que inclui o web dashboard estático)
-	apiServer := api.NewServer(sqliteRepo.DB())
+	apiServer := api.NewServer(sqliteRepo.DB(), nil)
 
 	slog.Info("Dashboard Standalone iniciado com sucesso! Acesse: http://localhost:8080")
 	if err := apiServer.Start(":8080"); err != nil {

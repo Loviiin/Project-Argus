@@ -202,6 +202,17 @@ func (s *Server) handleGetStatsImpl(w http.ResponseWriter, r *http.Request) {
 		topTags = topTags[:5]
 	}
 
+	dlqCount := 0
+	if s.nc != nil {
+		if js, err := s.nc.JetStream(); err == nil {
+			for stream := range js.Streams() {
+				if strings.Contains(strings.ToLower(stream.Config.Name), "dlq") {
+					dlqCount += int(stream.State.Msgs)
+				}
+			}
+		}
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"total": total,
 		"total_24h": total24h,
@@ -212,6 +223,7 @@ func (s *Server) handleGetStatsImpl(w http.ResponseWriter, r *http.Request) {
 			"rate_limited": rateLimited,
 		},
 		"top_tags": topTags,
+		"dlq_count": dlqCount,
 	})
 }
 
