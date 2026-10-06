@@ -19,10 +19,12 @@ function switchTab(tabId) {
     if(tabId === 'comments' && currentCommentsPage === 1) loadComments();
     if(tabId === 'stats') {
         loadStats();
-        loadTopContributors();
+        // loadTopContributors();
+        loadPrometheusMetrics();
         window.statsInterval = setInterval(() => {
             loadStats();
-            loadTopContributors();
+            // loadTopContributors();
+            loadPrometheusMetrics();
         }, 60000);
     }
 }
@@ -476,6 +478,74 @@ async function loadTopContributors() {
     } catch (err) {
         console.error(err);
     }
+}
+
+// Load Prometheus Metrics
+async function loadPrometheusMetrics() {
+    try {
+        const res = await fetch('/api/metrics/prometheus');
+        const text = await res.text();
+        const grid = document.getElementById('prometheus-metrics-grid');
+        
+        if (!grid) return;
+        if (!text) {
+            grid.innerHTML = '<div class="empty-state">Nenhuma métrica recebida.</div>';
+            return;
+        }
+
+        const metrics = parsePrometheusMetrics(text);
+        if (metrics.length === 0) {
+            grid.innerHTML = '<div class="empty-state">Nenhuma métrica encontrada.</div>';
+            return;
+        }
+
+        grid.innerHTML = metrics.map(m => `
+            <div class="card" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); padding: 1.2rem; text-align: center; border-radius: 12px;">
+                <div style="color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.8rem; word-wrap: break-word; min-height: 2rem; display: flex; align-items: center; justify-content: center;">${escapeHtml(m.help)}</div>
+                <div style="font-size: 2rem; font-weight: 800; color: #a8b2d1; font-family: monospace;">${escapeHtml(m.value)}</div>
+                <div style="font-size: 0.65rem; color: rgba(255,255,255,0.2); margin-top: 1rem; user-select: all;" title="${escapeHtml(m.name)}">${escapeHtml(m.name)}</div>
+            </div>
+        `).join('');
+    } catch (err) {
+        console.error(err);
+        const grid = document.getElementById('prometheus-metrics-grid');
+        if (grid) {
+            grid.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1;">Erro ao carregar métricas: ${err.message}</div>`;
+        }
+    }
+}
+
+function parsePrometheusMetrics(text) {
+    const lines = text.split('\\n');
+    const metrics = [];
+    let currentHelp = '';
+    
+    for (let line of lines) {
+        line = line.trim();
+        if (!line) continue;
+        
+        if (line.startsWith('# HELP ')) {
+            const parts = line.split(' ');
+            if (parts.length >= 3) {
+                currentHelp = parts.slice(3).join(' ');
+            }
+        } else if (line.startsWith('# TYPE ')) {
+            // Ignora type por enquanto
+        } else if (!line.startsWith('#')) {
+            const parts = line.split(' ');
+            if (parts.length >= 2) {
+                const name = parts[0];
+                const value = parts[1];
+                metrics.push({
+                    name: name,
+                    value: value,
+                    help: currentHelp || name
+                });
+                currentHelp = ''; // reseta pro próximo
+            }
+        }
+    }
+    return metrics;
 }
 
 function applyFilters() {

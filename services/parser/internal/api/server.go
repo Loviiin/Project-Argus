@@ -36,6 +36,7 @@ func (s *Server) Start(port string) error {
 	mux.HandleFunc("/api/export", s.handleExport)
 	mux.HandleFunc("/api/stats/top-contributors", s.handleGetTopContributors)
 	mux.HandleFunc("/api/stats", s.handleGetStats)
+	mux.HandleFunc("/api/metrics/prometheus", s.handleGetPrometheusMetrics)
 	// Como mux padrão do Go 1.22 aceita métodos, podemos fazer:
 	// Mas como pode ser 1.21, vamos usar HandleFunc e tratar método dentro
 	mux.HandleFunc("/api/artifacts/", s.handleUpdateTags)
@@ -481,4 +482,9 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateTags(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	s.handleUpdateTagsImpl(w, r)
+}
+
+func (s *Server) handleGetPrometheusMetrics(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+	s.handleGetPrometheusMetricsImpl(w, r)
 }

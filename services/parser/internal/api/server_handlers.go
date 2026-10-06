@@ -261,3 +261,27 @@ func (s *Server) handleUpdateTagsImpl(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
+
+func (s *Server) handleGetPrometheusMetricsImpl(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get("http://localhost:8084/metrics")
+	if err != nil {
+		http.Error(w, "metrics indisponíveis", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	
+	// Copy response body to writer
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+}
