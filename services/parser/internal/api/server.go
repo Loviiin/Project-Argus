@@ -158,7 +158,7 @@ func (s *Server) handleGetArtifacts(w http.ResponseWriter, r *http.Request) {
 			MAX(a.id), MAX(a.source_url), MAX(a.author_id), GROUP_CONCAT(DISTINCT a.discord_invite_code), 
 			MAX(a.discord_server_name), MAX(a.discord_member_count), MAX(a.discord_icon), 
 			MAX(a.discord_status), MAX(a.processed_at), MAX(a.raw_ocr_text),
-			MAX((SELECT avatar_url FROM comments c WHERE c.nickname = a.author_id LIMIT 1)) as avatar_url,
+			(SELECT avatar_url FROM comments c WHERE c.nickname = MAX(a.author_id) LIMIT 1) as avatar_url,
 			COUNT(*) as mentions_count, MAX(a.tags) as tags
 		FROM artifacts a
 		%s
