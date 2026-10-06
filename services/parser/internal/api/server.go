@@ -374,19 +374,19 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 
 	var totalCount int
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM artifacts a JOIN artifacts_fts fts ON a.id = fts.rowid %s", whereClause)
+	countQuery := fmt.Sprintf("SELECT COUNT(DISTINCT CASE WHEN a.discord_server_id = '' OR a.discord_server_id IS NULL THEN a.discord_invite_code ELSE a.discord_server_id END) FROM artifacts a JOIN artifacts_fts fts ON a.id = fts.rowid %s", whereClause)
 	s.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount)
 
 	sortOrder := r.URL.Query().Get("sort")
 	sortBy := r.URL.Query().Get("sort_by")
 	
-	orderField := "a.processed_at"
+	orderField := "g.processed_at"
 	if sortBy == "members" {
-		orderField = "a.discord_member_count"
+		orderField = "g.member_count"
 	} else if sortBy == "name" {
-		orderField = "a.discord_server_name"
+		orderField = "g.server_name"
 	} else if sortBy == "status" {
-		orderField = "a.discord_status"
+		orderField = "g.status"
 	}
 	
 	orderClause := "ORDER BY " + orderField + " DESC" // default to recency for search too
@@ -395,15 +395,24 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queryStr := fmt.Sprintf(`
-		SELECT a.id, a.source_url, a.discord_invite_code, a.author_id,
-			   a.discord_server_name, a.discord_server_id,
-			   a.discord_member_count, a.discord_icon,
-			   a.discord_status, a.processed_at,
-			   (SELECT avatar_url FROM comments c WHERE c.nickname = a.author_id LIMIT 1) as avatar_url,
-			   a.tags
-		FROM artifacts a
-		JOIN artifacts_fts fts ON a.id = fts.rowid
-		%s
+		SELECT
+			g.id, g.source_url, g.invite_codes, g.author_id,
+			g.server_name, g.server_id,
+			g.member_count, g.icon,
+			g.status, g.processed_at,
+			(SELECT c.avatar_url FROM comments c WHERE c.nickname = g.author_id LIMIT 1) as avatar_url,
+			g.tags
+		FROM (
+			SELECT 
+				MAX(a.id) as id, MAX(a.source_url) as source_url, GROUP_CONCAT(DISTINCT a.discord_invite_code) as invite_codes, MAX(a.author_id) as author_id,
+				MAX(a.discord_server_name) as server_name, MAX(a.discord_server_id) as server_id,
+				MAX(a.discord_member_count) as member_count, MAX(a.discord_icon) as icon,
+				MAX(a.discord_status) as status, MAX(a.processed_at) as processed_at, MAX(a.tags) as tags
+			FROM artifacts a
+			JOIN artifacts_fts fts ON a.id = fts.rowid
+			%s
+			GROUP BY CASE WHEN a.discord_server_id = '' OR a.discord_server_id IS NULL THEN a.discord_invite_code ELSE a.discord_server_id END
+		) g
 		%s
 		LIMIT ? OFFSET ?
 	`, whereClause, orderClause)
