@@ -515,7 +515,7 @@ async function loadPrometheusMetrics() {
 }
 
 function parsePrometheusMetrics(text) {
-    const lines = text.split('\\n');
+    const lines = text.split('\n');
     const metrics = [];
     let currentHelp = '';
     
