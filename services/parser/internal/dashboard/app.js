@@ -19,13 +19,12 @@ function switchTab(tabId) {
     if(tabId === 'comments' && currentCommentsPage === 1) loadComments();
     if(tabId === 'stats') {
         loadStats();
-        // loadTopContributors();
         loadPrometheusMetrics();
         window.statsInterval = setInterval(() => {
+            if (document.hidden) return; // Economiza bateria/hardware se a aba não estiver visível
             loadStats();
-            // loadTopContributors();
             loadPrometheusMetrics();
-        }, 60000);
+        }, 300000); // 5 minutos (evita sobrecarga no banco)
     }
 }
 

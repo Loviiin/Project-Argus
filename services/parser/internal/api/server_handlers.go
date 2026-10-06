@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // handleExport implementation
@@ -263,9 +264,10 @@ func (s *Server) handleUpdateTagsImpl(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetPrometheusMetricsImpl(w http.ResponseWriter, r *http.Request) {
-	resp, err := http.Get("http://localhost:8084/metrics")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:8084/metrics")
 	if err != nil {
-		http.Error(w, "metrics indisponíveis", http.StatusServiceUnavailable)
+		http.Error(w, "metrics indisponíveis: " + err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
