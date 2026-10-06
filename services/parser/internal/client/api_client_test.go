@@ -342,7 +342,7 @@ func TestErrCircuitOpen(t *testing.T) {
 func TestNewDiscordClient_ReturnsHTTPDiscordClient(t *testing.T) {
 	t.Parallel()
 
-	provider := NewDiscordClient("", "", nil)
+	provider := NewDiscordClient("", "", "api", nil)
 	if provider == nil {
 		t.Fatal("expected non-nil DiscordProvider")
 	}
@@ -359,7 +359,7 @@ func TestNewDiscordClient_ReturnsHTTPDiscordClient(t *testing.T) {
 func TestNewDiscordClient_WithProxy(t *testing.T) {
 	t.Parallel()
 
-	provider := NewDiscordClient("http://proxy.local:3128", "", nil)
+	provider := NewDiscordClient("http://proxy.local:3128", "", "api", nil)
 	concrete, ok := provider.(*HTTPDiscordClient)
 	if !ok {
 		t.Fatalf("expected *HTTPDiscordClient, got %T", provider)

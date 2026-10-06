@@ -143,7 +143,7 @@ func main() {
 	go metrics.StartMetricsServer(":8084", rdb, parserMetrics, healthHandler)
 
 	finder := logic.NewDiscordFinder()
-	discordClient := client.NewDiscordClient(cfg.Discord.ProxyURL, cfg.Discord.Token, rdb)
+	discordClient := client.NewDiscordClient(cfg.Discord.ProxyURL, cfg.Discord.Token, cfg.Discord.FetchMode, rdb)
 
 	// ==========================================
 	// 1. FAST INGESTION FLOW

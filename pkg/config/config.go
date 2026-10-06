@@ -61,8 +61,9 @@ type Config struct {
 	} `yaml:"meilisearch"`
 
 	Discord struct {
-		Token    string `yaml:"token"` // opcional
-		ProxyURL string `yaml:"proxy"` // opcional, formato: http://user:pass@ip:port
+		FetchMode string `yaml:"fetch_mode"`
+		Token     string `yaml:"token"` // opcional
+		ProxyURL  string `yaml:"proxy"` // opcional, formato: http://user:pass@ip:port
 	} `yaml:"discord"`
 }
 
