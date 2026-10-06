@@ -138,38 +138,53 @@ func (s *Server) handleGetArtifacts(w http.ResponseWriter, r *http.Request) {
 
 	sortOrder := r.URL.Query().Get("sort")
 	sortBy := r.URL.Query().Get("sort_by")
-	
-	orderField := "MAX(a.processed_at)"
+
+	// Colunas (aliases) do subquery agregado
+	orderField := "g.processed_at"
 	if sortBy == "members" {
-		orderField = "MAX(a.discord_member_count)"
+		orderField = "g.member_count"
 	} else if sortBy == "name" {
-		orderField = "MAX(a.discord_server_name)"
+		orderField = "g.server_name"
 	} else if sortBy == "status" {
-		orderField = "MAX(a.discord_status)"
-	}
-	
-	orderClause := "ORDER BY " + orderField + " DESC"
-	if sortOrder == "asc" {
-		orderClause = "ORDER BY " + orderField + " ASC"
+		orderField = "g.status"
 	}
 
+	orderDir := "DESC"
+	if sortOrder == "asc" {
+		orderDir = "ASC"
+	}
+	orderClause := "ORDER BY " + orderField + " " + orderDir
+
+	// Agrupa primeiro num subquery e só depois busca o avatar.
+	// SQLite não permite referenciar agregados (MAX) dentro de subquery correlacionada,
+	// e assim o lookup de avatar roda apenas para as linhas da página.
 	query := fmt.Sprintf(`
-		SELECT 
-			MAX(a.id), MAX(a.source_url), MAX(a.author_id), GROUP_CONCAT(DISTINCT a.discord_invite_code), 
-			MAX(a.discord_server_name), MAX(a.discord_member_count), MAX(a.discord_icon), 
-			MAX(a.discord_status), MAX(a.processed_at), MAX(a.raw_ocr_text),
-			(SELECT avatar_url FROM comments c WHERE c.nickname = MAX(a.author_id) LIMIT 1) as avatar_url,
-			COUNT(*) as mentions_count, MAX(a.tags) as tags
-		FROM artifacts a
-		%s
-		GROUP BY CASE WHEN a.discord_server_id = '' OR a.discord_server_id IS NULL THEN a.discord_invite_code ELSE a.discord_server_id END
+		SELECT
+			g.id, g.source_url, g.author_id, g.invite_codes,
+			g.server_name, g.member_count, g.icon,
+			g.status, g.processed_at, g.raw_ocr,
+			(SELECT c.avatar_url FROM comments c WHERE c.nickname = g.author_id LIMIT 1) AS avatar_url,
+			g.mentions_count, g.tags
+		FROM (
+			SELECT
+				MAX(a.id) AS id, MAX(a.source_url) AS source_url, MAX(a.author_id) AS author_id,
+				GROUP_CONCAT(DISTINCT a.discord_invite_code) AS invite_codes,
+				MAX(a.discord_server_name) AS server_name, MAX(a.discord_member_count) AS member_count,
+				MAX(a.discord_icon) AS icon, MAX(a.discord_status) AS status,
+				MAX(a.processed_at) AS processed_at, MAX(a.raw_ocr_text) AS raw_ocr,
+				COUNT(*) AS mentions_count, MAX(a.tags) AS tags
+			FROM artifacts a
+			%s
+			GROUP BY CASE WHEN a.discord_server_id = '' OR a.discord_server_id IS NULL THEN a.discord_invite_code ELSE a.discord_server_id END
+		) g
 		%s
 		LIMIT ? OFFSET ?
 	`, whereClause, orderClause)
 
 	args = append(args, limit, offset)
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.QueryContext(r.Context(), query, args...)
 	if err != nil {
+		slog.Error("Erro na query de artifacts", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
