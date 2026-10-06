@@ -189,8 +189,39 @@ func (r *SQLiteRepository) runMigrations(ctx context.Context) error {
 		}
 	}
 
+	// Migrations 1-5 podem ter sido marcadas como aplicadas sem rodar de fato (banco legado).
+	// Garante que as colunas realmente existem, independente do schema_migrations.
+	r.ensureColumns(ctx)
+
 	slog.Info("Migrations concluídas no SQLite.")
 	return nil
+}
+
+func (r *SQLiteRepository) ensureColumns(ctx context.Context) {
+	required := []struct{ table, column, ddl string }{
+		{"artifacts", "tags", "ALTER TABLE artifacts ADD COLUMN tags TEXT DEFAULT ''"},
+		{"comments", "unique_id", "ALTER TABLE comments ADD COLUMN unique_id TEXT"},
+		{"comments", "avatar_url", "ALTER TABLE comments ADD COLUMN avatar_url TEXT"},
+	}
+	for _, c := range required {
+		var exists bool
+		err := r.dbWrite.QueryRowContext(ctx,
+			"SELECT EXISTS (SELECT 1 FROM pragma_table_info(?) WHERE name = ?)", c.table, c.column).Scan(&exists)
+		if err != nil {
+			slog.Error("Falha ao verificar coluna", "table", c.table, "column", c.column, "erro", err)
+			continue
+		}
+		if exists {
+			continue
+		}
+		slog.Warn("Coluna ausente detectada, criando...", "table", c.table, "column", c.column)
+		if _, err := r.dbWrite.ExecContext(ctx, c.ddl); err != nil {
+			slog.Error("Falha ao criar coluna", "table", c.table, "column", c.column, "erro", err)
+		}
+	}
+	if _, err := r.dbWrite.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_comments_nickname ON comments(nickname)"); err != nil {
+		slog.Warn("Falha ao garantir idx_comments_nickname", "erro", err)
+	}
 }
 
 func (r *SQLiteRepository) Save(ctx context.Context, a Artifact) (string, error) {
