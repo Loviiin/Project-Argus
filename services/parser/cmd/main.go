@@ -450,7 +450,7 @@ func main() {
 	// 3. RECOVERY: Re-enrich rate_limited invites
 	// ==========================================
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			circuitKey := "argus:circuit_breaker:discord"
@@ -459,7 +459,7 @@ func main() {
 				continue
 			}
 
-			invites, err := repo.GetRateLimitedInvites(context.Background(), 50)
+			invites, err := repo.GetRateLimitedInvites(context.Background(), 200)
 			if err != nil {
 				slog.Error("Erro buscando invites rate_limited [Recovery]", "error", err)
 				continue
@@ -503,3 +503,5 @@ func main() {
 	time.Sleep(1 * time.Second)
 	slog.Info("Parser Service encerrado gracefully.")
 }
+ 
+ 

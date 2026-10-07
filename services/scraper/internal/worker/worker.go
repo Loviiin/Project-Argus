@@ -187,7 +187,7 @@ func (p *Processor) ProcessVideo(ctx context.Context, job ScrapeJob) (int, error
 			ocrMsg := map[string]interface{}{
 				"source_path":       fmt.Sprintf("https://www.tiktok.com/@%s/video/%s#comment-%s", c.User.UniqueId, job.VideoID, c.Cid),
 				"text_content":      c.Text,
-				"author_id":         c.User.Nickname,
+				"author_id":         c.User.UniqueId,
 				"is_reply":          job.CommentID != "",
 				"parent_comment_id": job.CommentID,
 			}

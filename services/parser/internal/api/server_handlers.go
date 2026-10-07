@@ -161,10 +161,26 @@ func (s *Server) handleGetStatsImpl(w http.ResponseWriter, r *http.Request) {
 	s.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM artifacts WHERE processed_at >= datetime('now', '-1 day')").Scan(&total24h)
 
 	var active, pending, invalid, rateLimited int
-	s.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM artifacts WHERE UPPER(discord_status) = 'ACTIVE'").Scan(&active)
-	s.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM artifacts WHERE UPPER(discord_status) = 'PENDING'").Scan(&pending)
-	s.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM artifacts WHERE UPPER(discord_status) IN ('EXPIRED', 'INVALID')").Scan(&invalid)
-	s.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM artifacts WHERE UPPER(discord_status) = 'RATE_LIMITED'").Scan(&rateLimited)
+	rowsStats, _ := s.db.QueryContext(r.Context(), "SELECT UPPER(discord_status), COUNT(*) FROM artifacts GROUP BY UPPER(discord_status)")
+	if rowsStats != nil {
+		defer rowsStats.Close()
+		for rowsStats.Next() {
+			var st string
+			var count int
+			if err := rowsStats.Scan(&st, &count); err == nil {
+				switch st {
+				case "ACTIVE":
+					active = count
+				case "PENDING":
+					pending = count
+				case "EXPIRED", "INVALID":
+					invalid += count
+				case "RATE_LIMITED":
+					rateLimited = count
+				}
+			}
+		}
+	}
 
 	// top tags (simple split in go since sqlite split is hard)
 	rows, _ := s.db.QueryContext(r.Context(), "SELECT tags FROM artifacts WHERE tags IS NOT NULL AND tags != ''")
