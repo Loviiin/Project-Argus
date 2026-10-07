@@ -503,5 +503,4 @@ func main() {
 	time.Sleep(1 * time.Second)
 	slog.Info("Parser Service encerrado gracefully.")
 }
- 
- 
+

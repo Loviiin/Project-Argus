@@ -6,4 +6,4 @@ Purpose
 
 Status
 
-- Not implemented yet. Use Scraper as a starting point to publish `jobs.scrape` or wire a consumer to produce `jobs.analyse` for Vision.
+- Not implemented yet. Use Scraper as a starting point to publish `jobs.scrape`

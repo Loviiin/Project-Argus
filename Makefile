@@ -1,9 +1,9 @@
 .PHONY: all up down logs setup clean clean-data clean-workers
-.PHONY: setup-go setup-python setup-discovery setup-scraper
-.PHONY: run-parser run-vision run-discovery run-captcha-solver
+.PHONY: setup-go setup-discovery setup-scraper
+.PHONY: run-parser run-discovery
 .PHONY: run-worker-1 run-worker-2 run-worker-3 run-worker-4 run-worker-5 run-worker-6
-.PHONY: test test-unit test-dedup test-captcha train-vision
-.PHONY: build-discovery build-scraper build-parser build-vision build-all
+.PHONY: test test-unit test-dedup test-captcha
+.PHONY: build-discovery build-scraper build-parser build-all
 .PHONY: help vnc
 
 # 🚀 Project Argus - Makefile
@@ -57,7 +57,7 @@ clean-workers: ## Limpa travas (locks) e processos presos do Chromium dos worker
 
 # --- Setup & Dependencies ---
 
-setup: setup-go setup-discovery setup-python ## Instala dependências de todos os serviços
+setup: setup-go setup-discovery setup-scraper ## Instala dependências de todos os serviços
 	@echo "Setup concluído!"
 
 setup-go:
@@ -71,11 +71,6 @@ setup-discovery:
 setup-scraper:
 	@echo "Instalando deps do Scraper (Go)..."
 	cd services/scraper && go mod tidy
-
-setup-python:
-	cd services/vision && python3 -m venv .venv
-	cd services/vision && ./.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-	cd services/vision && ./.venv/bin/pip install -r requirements.txt
 
 # --- Tests ---
 
@@ -120,17 +115,6 @@ run-worker-5: ## Roda Worker/Scraper 5
 run-worker-6: ## Roda Worker/Scraper 6
 	cd services/scraper && WORKER_ID=6 go run main.go
 
-run-vision: ## Roda o serviço Vision (ML)
-	cd services/vision && ./.venv/bin/python src/main.py
-
-run-captcha-solver: ## Roda o Captcha Solver (Vision)
-	cd services/vision && ./.venv/bin/python -m src.captcha_solver
-
-# --- Vision/ML ---
-
-train-vision: ## Treina o modelo ML do Captcha de Rotação
-	cd services/vision && ./.venv/bin/python scripts/train.py
-
 # --- Build ---
 
 build-discovery: ## Compila o Discovery
@@ -142,10 +126,7 @@ build-scraper: ## Compila o Scraper
 build-parser: ## Compila o Parser
 	cd services/parser && go build -o parser cmd/main.go
 
-build-vision: ## Builda a imagem Docker do Vision
-	docker build -t argus-vision:latest services/vision
-
-build-all: build-discovery build-scraper build-parser build-vision ## Compila todos os serviços
+build-all: build-discovery build-scraper build-parser ## Compila todos os serviços
 
 # --- Utilities ---
 

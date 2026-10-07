@@ -24,6 +24,7 @@ services:
       - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
       - SIDECAR_API_KEY=${SIDECAR_API_KEY:-}
+    init: true
     deploy:
       resources:
         limits:

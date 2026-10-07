@@ -90,18 +90,7 @@ wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 sudo apt install -y ./google-chrome-stable_current_amd64.deb
 rm google-chrome-stable_current_amd64.deb
 
-echo "=== 🐍 Instalando Python & Dependências de ML ==="
-sudo apt install -y python3 python3-pip python3-venv
-
-if [ ! -d "services/vision/venv" ]; then
-    echo "Criando VENV em services/vision/venv..."
-    python3 -m venv services/vision/venv
-fi
-
-source services/vision/venv/bin/activate
-pip install --upgrade pip
-pip install -r services/vision/requirements.txt
-deactivate
+echo "=== 🐍 Python não é mais obrigatório (Vision desativado) ==="
 
 echo "=== 🐳 Instalando Docker ==="
 if ! command -v docker &> /dev/null; then

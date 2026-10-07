@@ -25,6 +25,7 @@ services:
       - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
       - SIDECAR_API_KEY=${SIDECAR_API_KEY:-}
+    init: true
     deploy:
       resources:
         limits:
@@ -41,7 +42,7 @@ services:
       - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-10}
       - RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-30}
     volumes:
-      - ./config/config.example.yaml:/app/config.yaml
+      - ./config.yaml:/app/config.yaml
       - ./data:/app/data
     ports:
       - "8082:8080" # Web Dashboard
@@ -58,7 +59,7 @@ services:
       - SIDECAR_URL=http://sidecar:8080
       - GOMEMLIMIT=50MiB
     volumes:
-      - ./config/config.example.yaml:/app/config.yaml
+      - ./config.yaml:/app/config.yaml
     ports:
       - "8081:8081" # Metrics
     depends_on:
@@ -74,7 +75,7 @@ services:
       - CONFIG_PATH=/app/config.yaml
       - GOMEMLIMIT=50MiB
     volumes:
-      - ./config/config.example.yaml:/app/config.yaml
+      - ./config.yaml:/app/config.yaml
       - ./data:/app/data
     depends_on:
       - nats
@@ -90,7 +91,7 @@ services:
       - GOMEMLIMIT=50MiB
       - WORKER_TYPE=reply
     volumes:
-      - ./config/config.example.yaml:/app/config.yaml
+      - ./config.yaml:/app/config.yaml
       - ./data:/app/data
     depends_on:
       - nats

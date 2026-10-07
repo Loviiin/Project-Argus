@@ -94,6 +94,7 @@ services:
       - PORT=8080
       - PROXY_ENABLED=false
       - SIDECAR_API_KEY=${SIDECAR_API_KEY:-}
+    init: true
     deploy:
       resources:
         limits:
