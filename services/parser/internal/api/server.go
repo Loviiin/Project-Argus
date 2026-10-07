@@ -9,13 +9,20 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
 
+var serverStartTime = time.Now()
+
 type Server struct {
 	db *sql.DB
 	nc *nats.Conn
+	
+	apiRequestsTotal  uint64
+	apiLatencyTotalMs uint64
 }
 
 func NewServer(db *sql.DB, nc *nats.Conn) *Server {
@@ -37,8 +44,6 @@ func (s *Server) Start(port string) error {
 	mux.HandleFunc("/api/stats/top-contributors", s.handleGetTopContributors)
 	mux.HandleFunc("/api/stats", s.handleGetStats)
 	mux.HandleFunc("/api/metrics/prometheus", s.handleGetPrometheusMetrics)
-	// Como mux padrão do Go 1.22 aceita métodos, podemos fazer:
-	// Mas como pode ser 1.21, vamos usar HandleFunc e tratar método dentro
 	mux.HandleFunc("/api/artifacts/", s.handleUpdateTags)
 
 	// Arquivos estáticos (Dashboard)
@@ -47,8 +52,20 @@ func (s *Server) Start(port string) error {
 
 	limiter := NewIPRateLimiterFromEnv()
 
+	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		limiter.Middleware(mux).ServeHTTP(w, r)
+		
+		// Track only /api/ calls and exclude the prometheus endpoint to avoid recursive inflation
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/metrics/prometheus" {
+			duration := time.Since(start).Milliseconds()
+			atomic.AddUint64(&s.apiRequestsTotal, 1)
+			atomic.AddUint64(&s.apiLatencyTotalMs, uint64(duration))
+		}
+	})
+
 	slog.Info("Iniciando Web Dashboard", "port", port)
-	return http.ListenAndServe(port, limiter.Middleware(mux))
+	return http.ListenAndServe(port, loggedMux)
 }
 
 var allowedOrigin = getEnv("ALLOWED_ORIGIN", "*")
@@ -379,7 +396,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	sortOrder := r.URL.Query().Get("sort")
 	sortBy := r.URL.Query().Get("sort_by")
-	
+
 	orderField := "g.processed_at"
 	if sortBy == "members" {
 		orderField = "g.member_count"
@@ -388,7 +405,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	} else if sortBy == "status" {
 		orderField = "g.status"
 	}
-	
+
 	orderClause := "ORDER BY " + orderField + " DESC" // default to recency for search too
 	if sortOrder == "asc" {
 		orderClause = "ORDER BY " + orderField + " ASC"

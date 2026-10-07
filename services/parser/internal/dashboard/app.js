@@ -6,7 +6,7 @@ const limit = 50;
 function switchTab(tabId) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    
+
     document.getElementById(tabId).classList.add('active');
     event.currentTarget.classList.add('active');
 
@@ -15,9 +15,9 @@ function switchTab(tabId) {
         window.statsInterval = null;
     }
 
-    if(tabId === 'artifacts' && currentArtifactsPage === 1) loadArtifacts();
-    if(tabId === 'comments' && currentCommentsPage === 1) loadComments();
-    if(tabId === 'stats') {
+    if (tabId === 'artifacts' && currentArtifactsPage === 1) loadArtifacts();
+    if (tabId === 'comments' && currentCommentsPage === 1) loadComments();
+    if (tabId === 'stats') {
         loadStats();
         loadPrometheusMetrics();
         window.statsInterval = setInterval(() => {
@@ -30,9 +30,9 @@ function switchTab(tabId) {
 
 // Utils
 const formatDate = (dateStr) => {
-    if(!dateStr) return '';
+    if (!dateStr) return '';
     const d = new Date(dateStr);
-    return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+    return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 };
 
 const escapeHtml = (unsafe) => {
@@ -49,11 +49,11 @@ async function loadArtifacts(page = 1) {
     const minMembers = document.getElementById('min-members') ? document.getElementById('min-members').value : '';
     const maxMembers = document.getElementById('max-members') ? document.getElementById('max-members').value : '';
     const tagFilter = document.getElementById('tag-filter') ? document.getElementById('tag-filter').value.trim() : '';
-    
+
     const grid = document.getElementById('artifacts-grid');
 
     if (grid) grid.innerHTML = '<div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando servidores...</div>';
-    
+
     try {
         let url = `/api/artifacts?limit=${limit}&offset=${offset}&status=${statusFilter}&sort_by=${sortByFilter}&sort=${sortFilter}`;
         if (minMembers) url += `&min_members=${minMembers}`;
@@ -77,11 +77,11 @@ async function searchArtifacts(query, page = 1) {
     const minMembers = document.getElementById('min-members') ? document.getElementById('min-members').value : '';
     const maxMembers = document.getElementById('max-members') ? document.getElementById('max-members').value : '';
     const tagFilter = document.getElementById('tag-filter') ? document.getElementById('tag-filter').value.trim() : '';
-    
+
     const grid = document.getElementById('artifacts-grid');
 
     if (grid) grid.innerHTML = '<div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Buscando servidores...</div>';
-    
+
     try {
         let url = `/api/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&status=${statusFilter}&sort_by=${sortByFilter}&sort=${sortFilter}`;
         if (minMembers) url += `&min_members=${minMembers}`;
@@ -98,8 +98,8 @@ async function searchArtifacts(query, page = 1) {
 }
 
 function renderArtifactsGrid(data, grid) {
-    if(!grid) return;
-    if(!data || !data.items || data.items.length === 0) {
+    if (!grid) return;
+    if (!data || !data.items || data.items.length === 0) {
         grid.innerHTML = `<div class="empty-state"><i class="fa-solid fa-ghost fa-3x" style="margin-bottom:1rem;opacity:0.5"></i><br>Nenhum servidor encontrado.</div>`;
         return;
     }
@@ -112,7 +112,7 @@ function renderArtifactsGrid(data, grid) {
         else if (status === 'RATE_LIMITED') statusClass = 'status-rate-limited';
 
         const serverName = item.discord_server_name || 'Desconhecido';
-        
+
         let iconUrl = null;
         if (item.discord_icon) {
             if (item.discord_icon.startsWith('http')) {
@@ -122,7 +122,7 @@ function renderArtifactsGrid(data, grid) {
             }
         }
         const avatarUrl = item.avatar_url || 'https://ui-avatars.com/api/?name=' + item.author_id + '&background=random';
-        
+
         let tagsHtml = '';
         if (item.tags) {
             item.tags.split(',').forEach(tag => {
@@ -130,12 +130,12 @@ function renderArtifactsGrid(data, grid) {
                 tagsHtml += `<span style="background: rgba(88, 101, 242, 0.2); border: 1px solid #5865f2; color: #fff; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem; margin-right: 4px;">${tag.trim()}</span>`;
             });
         }
-        
+
         const codes = item.discord_invite_codes ? item.discord_invite_codes.split(',') : [];
         const inviteUrl = codes.length > 0 ? `https://discord.gg/${codes[0]}` : '#';
         const videoUrl = item.source_url;
         const date = new Date(item.processed_at).toLocaleString('pt-BR');
-        
+
         let codesHtml = '';
         const visibleCodes = codes.slice(0, 5);
         const hiddenCodes = codes.slice(5);
@@ -229,14 +229,14 @@ async function loadComments(page = 1) {
     const grid = document.getElementById('comments-grid');
 
     if (grid) grid.innerHTML = '<div class="loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando comentários...</div>';
-    
+
     try {
         const res = await fetch(`/api/comments?limit=${limit}&offset=${offset}`);
         const data = await res.json();
-        
+
         if (!grid) return;
 
-        if(!data || !data.items || data.items.length === 0) {
+        if (!data || !data.items || data.items.length === 0) {
             grid.innerHTML = `<div class="empty-state"><i class="fa-solid fa-comment-slash fa-3x" style="margin-bottom:1rem;opacity:0.5"></i><br>Nenhum comentário coletado ainda.</div>`;
             return;
         }
@@ -270,7 +270,7 @@ async function loadComments(page = 1) {
             </div>
             `;
         }).join('');
-        
+
         renderPagination('comments-pagination', data.page, data.total_pages, loadComments);
     } catch (err) {
         if (grid) grid.innerHTML = `<div class="empty-state">Erro ao carregar dados: ${err.message}</div>`;
@@ -332,7 +332,7 @@ function renderPagination(containerId, currentPage, totalPages, onPageChange) {
     container.innerHTML = html;
 }
 
-window.pendingPageChange = function(_, newPage) {
+window.pendingPageChange = function (_, newPage) {
     if (newPage < 1 || newPage > window.pendingPageChangeTotalPages) return;
     if (window.pendingPageChangeCallback) {
         window.pendingPageChangeCallback(newPage);
@@ -377,7 +377,7 @@ async function loadStats() {
     try {
         const res = await fetch('/api/stats');
         const data = await res.json();
-        
+
         const summary = document.getElementById('stats-summary');
         if (summary) {
             summary.innerHTML = `
@@ -433,7 +433,7 @@ async function loadTopContributors() {
     try {
         const res = await fetch('/api/stats/top-contributors');
         const data = await res.json();
-        
+
         const list = document.getElementById('top-contributors-list');
         if (!list) return;
 
@@ -448,7 +448,7 @@ async function loadTopContributors() {
             if (i === 0) medal = '<i class="fa-solid fa-medal" style="color: gold;"></i> ';
             if (i === 1) medal = '<i class="fa-solid fa-medal" style="color: silver;"></i> ';
             if (i === 2) medal = '<i class="fa-solid fa-medal" style="color: #cd7f32;"></i> ';
-            
+
             // Usa o unique_id se existir (ex: @user123), caso contrário cai pro author_id
             const usernameToLink = c.unique_id ? c.unique_id : c.author_id;
             const tiktokUsername = encodeURIComponent(usernameToLink.trim());
@@ -456,7 +456,7 @@ async function loadTopContributors() {
             return `
                 <div class="card" style="display: flex; align-items: center; justify-content: space-between; padding: 1rem; gap: 1rem; flex-wrap: wrap;">
                     <div style="display: flex; align-items: center; gap: 1rem;">
-                        <span style="font-size: 1.2rem; font-weight: bold; width: 30px; text-align: center;">${i+1}º</span>
+                        <span style="font-size: 1.2rem; font-weight: bold; width: 30px; text-align: center;">${i + 1}º</span>
                         <img src="${avatarUrl}" style="width: 40px; height: 40px; border-radius: 50%;" onerror="this.src='https://ui-avatars.com/api/?name=${c.author_id}&background=random'">
                         <div>
                             <div style="font-weight: bold; font-size: 1.1rem;">${medal}${c.author_id}</div>
@@ -485,7 +485,7 @@ async function loadPrometheusMetrics() {
         const res = await fetch('/api/metrics/prometheus');
         const text = await res.text();
         const grid = document.getElementById('prometheus-metrics-grid');
-        
+
         if (!grid) return;
         if (!text) {
             grid.innerHTML = '<div class="empty-state">Nenhuma métrica recebida.</div>';
@@ -498,13 +498,28 @@ async function loadPrometheusMetrics() {
             return;
         }
 
-        grid.innerHTML = metrics.map(m => `
+        grid.innerHTML = metrics.map(m => {
+            let displayValue = m.value;
+            if (m.name === 'argus_parser_uptime_seconds') {
+                const secs = parseInt(m.value);
+                if (!isNaN(secs)) {
+                    const d = Math.floor(secs / (3600*24));
+                    const h = Math.floor(secs % (3600*24) / 3600);
+                    const min = Math.floor(secs % 3600 / 60);
+                    displayValue = d > 0 ? `${d}d ${h}h` : (h > 0 ? `${h}h ${min}m` : `${min}m`);
+                }
+            } else if (m.name === 'argus_api_latency_avg_ms') {
+                displayValue = `${m.value}ms`;
+            }
+
+            return `
             <div class="card" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); padding: 1.2rem; text-align: center; border-radius: 12px;">
                 <div style="color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.8rem; word-wrap: break-word; min-height: 2rem; display: flex; align-items: center; justify-content: center;">${escapeHtml(m.help)}</div>
-                <div style="font-size: 2rem; font-weight: 800; color: #a8b2d1; font-family: monospace;">${escapeHtml(m.value)}</div>
+                <div style="font-size: 2rem; font-weight: 800; color: #a8b2d1; font-family: monospace;">${escapeHtml(displayValue)}</div>
                 <div style="font-size: 0.65rem; color: rgba(255,255,255,0.2); margin-top: 1rem; user-select: all;" title="${escapeHtml(m.name)}">${escapeHtml(m.name)}</div>
             </div>
-        `).join('');
+            `;
+        }).join('');
     } catch (err) {
         console.error(err);
         const grid = document.getElementById('prometheus-metrics-grid');
@@ -518,11 +533,11 @@ function parsePrometheusMetrics(text) {
     const lines = text.split('\n');
     const metrics = [];
     let currentHelp = '';
-    
+
     for (let line of lines) {
         line = line.trim();
         if (!line) continue;
-        
+
         if (line.startsWith('# HELP ')) {
             const parts = line.split(' ');
             if (parts.length >= 3) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,7 +39,7 @@ func (s *Server) handleExportImpl(w http.ResponseWriter, r *http.Request) {
 			words[i] = `"` + word + `"*`
 		}
 		ftsQuery := strings.Join(words, " AND ")
-		
+
 		queryStr = "SELECT MAX(a.id), MAX(a.source_url), MAX(a.author_id), GROUP_CONCAT(DISTINCT a.discord_invite_code), MAX(a.discord_server_name), MAX(a.discord_member_count), MAX(a.discord_status), MAX(a.processed_at), MAX(a.tags) FROM artifacts a JOIN artifacts_fts fts ON a.id = fts.rowid"
 		conditions = append(conditions, "fts MATCH ?")
 		args = append(args, ftsQuery)
@@ -144,10 +145,10 @@ func (s *Server) handleGetTopContributorsImpl(w http.ResponseWriter, r *http.Req
 		var avatarUrl, uniqueId sql.NullString
 		if err := rows.Scan(&authorId, &total, &avatarUrl, &uniqueId); err == nil {
 			results = append(results, map[string]interface{}{
-				"author_id": authorId,
-				"total": total,
+				"author_id":  authorId,
+				"total":      total,
 				"avatar_url": avatarUrl.String,
-				"unique_id": uniqueId.String,
+				"unique_id":  uniqueId.String,
 			})
 		}
 	}
@@ -182,10 +183,10 @@ func (s *Server) handleGetStatsImpl(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	type tagCount struct {
-		Tag string `json:"tag"`
-		Count int `json:"count"`
+		Tag   string `json:"tag"`
+		Count int    `json:"count"`
 	}
 	var topTags []tagCount
 	for k, v := range tagCounts {
@@ -215,15 +216,15 @@ func (s *Server) handleGetStatsImpl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"total": total,
+		"total":     total,
 		"total_24h": total24h,
 		"status": map[string]int{
-			"active": active,
-			"pending": pending,
-			"invalid": invalid,
+			"active":       active,
+			"pending":      pending,
+			"invalid":      invalid,
 			"rate_limited": rateLimited,
 		},
-		"top_tags": topTags,
+		"top_tags":  topTags,
 		"dlq_count": dlqCount,
 	})
 }
@@ -237,7 +238,7 @@ func (s *Server) handleUpdateTagsImpl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// URL: /api/artifacts/{id}/tags
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 || parts[4] != "tags" {
@@ -245,7 +246,7 @@ func (s *Server) handleUpdateTagsImpl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := parts[3]
-	
+
 	var req struct {
 		Tags string `json:"tags"`
 	}
@@ -267,14 +268,14 @@ func (s *Server) handleGetPrometheusMetricsImpl(w http.ResponseWriter, r *http.R
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get("http://127.0.0.1:8084/metrics")
 	if err != nil {
-		http.Error(w, "metrics indisponíveis: " + err.Error(), http.StatusServiceUnavailable)
+		http.Error(w, "metrics indisponíveis: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
 
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
-	
+
 	// Copy response body to writer
 	buf := make([]byte, 4096)
 	for {
@@ -286,4 +287,27 @@ func (s *Server) handleGetPrometheusMetricsImpl(w http.ResponseWriter, r *http.R
 			break
 		}
 	}
+	
+	// Append lightweight internal metrics
+	reqCount := atomic.LoadUint64(&s.apiRequestsTotal)
+	latCount := atomic.LoadUint64(&s.apiLatencyTotalMs)
+	
+	avgLat := uint64(0)
+	if reqCount > 0 {
+		avgLat = latCount / reqCount
+	}
+	
+	uptime := time.Since(serverStartTime).Seconds()
+	
+	fmt.Fprintf(w, "# HELP argus_api_requests_total Total de requests na API interna\n")
+	fmt.Fprintf(w, "# TYPE argus_api_requests_total counter\n")
+	fmt.Fprintf(w, "argus_api_requests_total %d\n\n", reqCount)
+
+	fmt.Fprintf(w, "# HELP argus_api_latency_avg_ms Latência média de resposta da API (ms)\n")
+	fmt.Fprintf(w, "# TYPE argus_api_latency_avg_ms gauge\n")
+	fmt.Fprintf(w, "argus_api_latency_avg_ms %d\n\n", avgLat)
+	
+	fmt.Fprintf(w, "# HELP argus_parser_uptime_seconds Tempo de atividade do container (segundos)\n")
+	fmt.Fprintf(w, "# TYPE argus_parser_uptime_seconds gauge\n")
+	fmt.Fprintf(w, "argus_parser_uptime_seconds %.0f\n\n", uptime)
 }
